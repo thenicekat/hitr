@@ -184,7 +184,7 @@ body { overflow: hidden; }
 .hdr { display: flex; gap: 12px; padding: 2px 0; font-size: 11px; }
 .hdr-k { color: var(--accent); min-width: 180px; }
 .hdr-v { color: var(--fg); word-break: break-all; }
-.body-json { white-space: pre; overflow-x: auto; background: var(--bg2); padding: 12px; border-radius: 4px; margin: 0; user-select: text; }
+.body-json { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; background: var(--bg2); padding: 12px; border-radius: 4px; margin: 0; user-select: text; }
 
 .muted { color: var(--fg-mute); }
 .center { text-align: center; padding: 40px; }
