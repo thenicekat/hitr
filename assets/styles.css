@@ -160,6 +160,19 @@ body { overflow: hidden; }
 }
 .btn:hover { border-color: var(--accent); }
 .btn.small { padding: 2px 8px; font-size: 11px; }
+.btn.icon {
+  padding: 0;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
+  font-family: -apple-system, "Apple Color Emoji", ui-monospace, monospace;
+}
+.btn.icon.danger { color: var(--danger); }
+.btn.icon.danger:hover { background: var(--danger); color: var(--bg); border-color: var(--danger); }
 .btn.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
 .btn.primary:hover { background: var(--accent2); border-color: var(--accent2); }
 .btn.danger { color: var(--danger); border-color: var(--danger); }

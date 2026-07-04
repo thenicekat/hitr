@@ -45,6 +45,34 @@ use dioxus::prelude::*;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
+/// Best-effort clipboard write. Silently drops errors — clipboard access can
+/// fail if the WebView doesn't have focus, and there's nothing useful to say.
+fn copy_to_clipboard(text: &str) {
+    if let Some(win) = web_sys::window() {
+        let clipboard = win.navigator().clipboard();
+        let _ = clipboard.write_text(text);
+    }
+}
+
+/// Global keyboard shortcuts: cmd/ctrl+Enter fires the selected request.
+/// cmd/ctrl+S is intercepted only to prevent the browser's default save-page
+/// dialog — the app already autosaves on every edit.
+fn install_shortcuts(fire: Callback<()>) {
+    let Some(win) = web_sys::window() else { return };
+    let Some(doc) = win.document() else { return };
+    let cb = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
+        let mod_key = e.meta_key() || e.ctrl_key();
+        if !mod_key { return; }
+        match e.key().as_str() {
+            "Enter" => { e.prevent_default(); fire.call(()); }
+            "s" | "S" => { e.prevent_default(); /* autosave already ran */ }
+            _ => {}
+        }
+    });
+    let _ = doc.add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref());
+    cb.forget();
+}
+
 /// Stamp `autocapitalize=off / autocorrect=off / spellcheck=false` on every
 /// `<input>` and `<textarea>` in the document, plus any inserted afterwards
 /// via a MutationObserver. Runs once on App mount.
@@ -155,11 +183,6 @@ pub fn App() -> Element {
         });
     });
 
-    use_hook(|| {
-        load_all.call(());
-        install_input_attrs();
-    });
-
     const RENDER_CAP: usize = 300;
     let filtered_reqs = use_memo(move || {
         let coll = collection.read();
@@ -179,6 +202,7 @@ pub fn App() -> Element {
     let total_reqs = use_memo(move || collection.read().requests.len());
     let shown_reqs = use_memo(move || filtered_reqs.read().len());
 
+    let mut history = use_signal(|| std::collections::HashMap::<String, Vec<FiredResponse>>::new());
     let fire = use_callback(move |()| {
         let req_id = selected_req.read().clone();
         let env_name = selected_env.read().clone();
@@ -188,11 +212,24 @@ pub fn App() -> Element {
         error.set(None);
         spawn(async move {
             match api::fire_request(&req_id, env_name.as_deref()).await {
-                Ok(r) => response.set(Some(r)),
+                Ok(r) => {
+                    let mut h = history.read().clone();
+                    let entry = h.entry(req_id.clone()).or_insert_with(Vec::new);
+                    entry.insert(0, r.clone());
+                    entry.truncate(10);
+                    history.set(h);
+                    response.set(Some(r));
+                }
                 Err(e) => error.set(Some(format!("fire: {}", e))),
             }
             firing.set(false);
         });
+    });
+
+    use_hook(|| {
+        load_all.call(());
+        install_input_attrs();
+        install_shortcuts(fire);
     });
 
     let selected_req_obj = use_memo(move || {
@@ -249,17 +286,23 @@ pub fn App() -> Element {
                 }
                 if !*vault_locked.read() {
                     button {
-                        class: "btn small ghost",
+                        class: "btn icon ghost",
+                        title: "lock vault",
                         onclick: move |_| {
                             spawn(async move {
                                 let _ = api::vault_lock().await;
                                 vault_locked.set(true);
                             });
                         },
-                        "🔒 lock"
+                        "🔒"
                     }
                 }
-                button { class: "btn ghost", onclick: move |_| load_all.call(()), "reload" }
+                button {
+                    class: "btn icon ghost",
+                    title: "reload collection",
+                    onclick: move |_| load_all.call(()),
+                    "↻"
+                }
             }
 
             div { class: "main",
@@ -267,7 +310,7 @@ pub fn App() -> Element {
                 div { class: "pane envs",
                     div { class: "pane-hdr",
                         span { "envs" }
-                        button { class: "btn small", onclick: move |_| modal.set(Modal::NewEnv), "+" }
+                        button { class: "btn icon", title: "new env", onclick: move |_| modal.set(Modal::NewEnv), "+" }
                     }
                     div { class: "list",
                         for env in collection.read().envs.iter() {
@@ -289,14 +332,16 @@ pub fn App() -> Element {
                     }
                     if let Some(env) = selected_env_obj.read().as_ref() {
                         div { class: "env-actions",
-                            button { class: "btn small",
+                            button { class: "btn icon",
+                                title: "edit env",
                                 onclick: move |_| modal.set(Modal::EditEnv),
-                                "edit"
+                                "✎"
                             }
                             {
                                 let e = env.clone();
                                 rsx! {
-                                    button { class: "btn small danger",
+                                    button { class: "btn icon danger",
+                                        title: "delete env",
                                         onclick: move |_| {
                                             let e = e.clone();
                                             spawn(async move {
@@ -308,7 +353,7 @@ pub fn App() -> Element {
                                                 load_all.call(());
                                             });
                                         },
-                                        "delete"
+                                        "🗑"
                                     }
                                 }
                             }
@@ -332,9 +377,9 @@ pub fn App() -> Element {
                                 "{total_reqs}"
                             }
                         }
-                        button { class: "btn small", onclick: move |_| modal.set(Modal::ImportCurl), "curl" }
-                        button { class: "btn small", onclick: move |_| modal.set(Modal::ImportOpenApi), "openapi" }
-                        button { class: "btn small", onclick: move |_| modal.set(Modal::NewRequest), "+" }
+                        button { class: "btn small", title: "import curl", onclick: move |_| modal.set(Modal::ImportCurl), "curl" }
+                        button { class: "btn small", title: "import openapi spec", onclick: move |_| modal.set(Modal::ImportOpenApi), "spec" }
+                        button { class: "btn icon", title: "new request", onclick: move |_| modal.set(Modal::NewRequest), "+" }
                     }
                     div { class: "list",
                         {
@@ -364,6 +409,7 @@ pub fn App() -> Element {
                             key: "{r.id}",
                             req: r.clone(),
                             firing: *firing.read(),
+                            current_env_name: selected_env.read().clone(),
                             on_fire: move |_| fire.call(()),
                             on_saved: move |_| load_all.call(()),
                         }
@@ -378,6 +424,34 @@ pub fn App() -> Element {
                                 span { class: "status-code s{resp.status / 100}xx", "{resp.status} {resp.status_text}" }
                                 span { class: "latency", "{resp.latency_ms} ms" }
                                 span { class: "final-url muted", "{resp.final_url}" }
+                                {
+                                    let body = resp.body.clone();
+                                    rsx! {
+                                        button {
+                                            class: "btn icon",
+                                            title: "copy response body",
+                                            onclick: move |_| copy_to_clipboard(&body),
+                                            "⎘"
+                                        }
+                                    }
+                                }
+                            }
+                            {
+                                let rid = selected_req.read().clone();
+                                let hist = rid.as_ref().and_then(|id| history.read().get(id).cloned()).unwrap_or_default();
+                                if hist.len() > 1 {
+                                    rsx! {
+                                        details { class: "headers",
+                                            summary { "history ({hist.len()})" }
+                                            for (i, h) in hist.iter().enumerate() {
+                                                div { class: "hdr", key: "{i}",
+                                                    span { class: "hdr-k", "#{i} · {h.status} {h.status_text}" }
+                                                    span { class: "hdr-v", "{h.latency_ms} ms" }
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else { rsx! {} }
                             }
                             details { class: "headers",
                                 summary { "headers ({resp.headers.len()})" }
@@ -1044,6 +1118,7 @@ enum EditorTab {
 fn RequestEditor(
     req: Request,
     firing: bool,
+    current_env_name: Option<String>,
     on_fire: EventHandler<()>,
     on_saved: EventHandler<()>,
 ) -> Element {
@@ -1128,6 +1203,53 @@ fn RequestEditor(
                 }
                 if *saving.read() {
                     span { class: "muted small", "saving…" }
+                }
+                {
+                    let rid = orig.id.clone();
+                    let rid2 = orig.id.clone();
+                    let orig_del = orig.clone();
+                    let env_for_curl = current_env_name.clone();
+                    rsx! {
+                        button {
+                            class: "btn icon",
+                            title: "duplicate request",
+                            onclick: move |_| {
+                                let rid = rid.clone();
+                                spawn(async move {
+                                    let _ = api::duplicate_request(&rid).await;
+                                    on_saved.call(());
+                                });
+                            },
+                            "⧉"
+                        }
+                        button {
+                            class: "btn icon",
+                            title: "copy as curl",
+                            onclick: move |_| {
+                                let rid = rid2.clone();
+                                let env = env_for_curl.clone();
+                                spawn(async move {
+                                    if let Ok(s) = api::to_curl(&rid, env.as_deref()).await {
+                                        copy_to_clipboard(&s);
+                                    }
+                                });
+                            },
+                            "⎘"
+                        }
+                        button {
+                            class: "btn icon danger",
+                            title: "delete request",
+                            onclick: move |_| {
+                                let r = orig_del.clone();
+                                spawn(async move {
+                                    if let Ok(_) = api::delete_request(&r).await {
+                                        on_saved.call(());
+                                    }
+                                });
+                            },
+                            "🗑"
+                        }
+                    }
                 }
                 button {
                     class: if firing { "btn primary disabled" } else { "btn primary" },
