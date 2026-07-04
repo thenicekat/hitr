@@ -1,0 +1,175 @@
+//! Request firing.
+//!
+//! Resolves `{{var}}` templates against the currently-selected env, pulls
+//! secret values from the vault at fire-time (never earlier — so keychain
+//! prompts happen only when actually needed), sends via reqwest, and returns
+//! a JSON-serializable `FiredResponse` for the frontend to render.
+
+use crate::model::*;
+use crate::vault::{self, VaultData};
+use serde::Serialize;
+use std::collections::HashMap;
+use std::time::Instant;
+
+#[derive(Debug, Serialize, Clone)]
+pub struct FiredResponse {
+    pub status: u16,
+    pub status_text: String,
+    pub latency_ms: u64,
+    pub headers: Vec<(String, String)>,
+    pub body: String,
+    pub is_json: bool,
+    pub final_url: String,
+}
+
+/// Merge non-secret env values with secret values pulled from the vault.
+/// Non-secret vars come from the yml directly; secret vars come from vault
+/// keyed under `<envName>/<varName>`. Missing secrets simply don't appear in
+/// the output map — substitution then leaves `{{name}}` intact.
+pub fn resolve_env_vars(env: &Env, vault_data: Option<&VaultData>) -> HashMap<String, String> {
+    let mut out = HashMap::with_capacity(env.variables.len());
+    for v in &env.variables {
+        if v.secret {
+            if let Some(data) = vault_data {
+                if let Some(val) = vault::get_from(data, &env.name, &v.name) {
+                    out.insert(v.name.clone(), val);
+                    continue;
+                }
+            }
+        }
+        if !v.value.is_empty() {
+            out.insert(v.name.clone(), v.value.clone());
+        }
+    }
+    out
+}
+
+/// Replace `{{name}}` occurrences in `s` with values from `vars`. Returns
+/// the substituted string plus the list of var names that were unresolved
+/// (so the caller can surface them in an error message).
+///
+/// Unresolved vars are left as literal `{{name}}` in the output — visible
+/// so the user sees what's missing.
+pub fn substitute(s: &str, vars: &HashMap<String, String>) -> (String, Vec<String>) {
+    let mut out = String::with_capacity(s.len());
+    let mut missing = Vec::new();
+    let mut rest = s;
+    while let Some(open) = rest.find("{{") {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 2..];
+        if let Some(close) = after.find("}}") {
+            let key = after[..close].trim();
+            if let Some(v) = vars.get(key) {
+                out.push_str(v);
+            } else {
+                missing.push(key.to_string());
+                out.push_str("{{");
+                out.push_str(&after[..close]);
+                out.push_str("}}");
+            }
+            rest = &after[close + 2..];
+        } else {
+            out.push_str(&rest[open..]);
+            rest = "";
+            break;
+        }
+    }
+    out.push_str(rest);
+    (out, missing)
+}
+
+/// Fire a request. Substitutes vars, adds bearer auth if `bearerToken` is
+/// present in the env and the request lacks an `Authorization` header,
+/// follows up to 5 redirects, pretty-prints JSON responses, returns
+/// status/latency/headers/body wrapped in a `FiredResponse`.
+///
+/// Fails early with a specific message if the URL contains any unresolved
+/// `{{var}}` — reqwest's own "builder error" is opaque and unhelpful.
+pub async fn fire(req: &Request, env: Option<&Env>, vault_data: Option<&VaultData>) -> Result<FiredResponse, String> {
+    let vars = env.map(|e| resolve_env_vars(e, vault_data)).unwrap_or_default();
+    let mut all_missing = std::collections::BTreeSet::new();
+
+    let (url, miss) = substitute(&req.http.url, &vars);
+    for m in miss { all_missing.insert(m); }
+
+    if url.contains("{{") {
+        return Err(format!(
+            "unresolved var(s) in url: {} — set values via env editor",
+            all_missing.iter().cloned().collect::<Vec<_>>().join(", ")
+        ));
+    }
+
+    let method = req.http.method.to_uppercase();
+
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let m = reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| e.to_string())?;
+    let parsed = reqwest::Url::parse(&url).map_err(|e| format!("invalid url `{}`: {}", url, e))?;
+    let mut rb = client.request(m, parsed);
+
+    for h in &req.http.headers {
+        if h.enabled == Some(false) {
+            continue;
+        }
+        let (val, miss) = substitute(&h.value, &vars);
+        for m in miss { all_missing.insert(m); }
+        rb = rb.header(&h.name, val);
+    }
+    if let Some(bearer) = vars.get("bearerToken") {
+        if !req.http.headers.iter().any(|h| h.name.eq_ignore_ascii_case("authorization")) {
+            rb = rb.header("Authorization", format!("Bearer {}", bearer));
+        }
+    }
+
+    if let Some(body_type) = req.http.body.r#type.as_deref() {
+        let raw = match body_type {
+            "json" => req.http.body.json.clone().unwrap_or_default(),
+            "text" => req.http.body.text.clone().unwrap_or_default(),
+            _ => req.http.body.data.clone().unwrap_or_default(),
+        };
+        if !raw.is_empty() {
+            let (sub, miss) = substitute(&raw, &vars);
+            for m in miss { all_missing.insert(m); }
+            if body_type == "json" {
+                rb = rb.header("Content-Type", "application/json").body(sub);
+            } else {
+                rb = rb.body(sub);
+            }
+        }
+    }
+
+    let started = Instant::now();
+    let resp = rb.send().await.map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
+    let status_text = resp.status().canonical_reason().unwrap_or("").to_string();
+    let final_url = resp.url().to_string();
+    let headers: Vec<(String, String)> = resp
+        .headers()
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+        .collect();
+    let is_json = headers
+        .iter()
+        .any(|(k, v)| k.eq_ignore_ascii_case("content-type") && v.contains("json"));
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    let body = if is_json {
+        serde_json::from_str::<serde_json::Value>(&text)
+            .and_then(|v| serde_json::to_string_pretty(&v))
+            .unwrap_or(text)
+    } else {
+        text
+    };
+    let latency_ms = started.elapsed().as_millis() as u64;
+    Ok(FiredResponse {
+        status,
+        status_text,
+        latency_ms,
+        headers,
+        body,
+        is_json,
+        final_url,
+    })
+}
