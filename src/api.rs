@@ -189,3 +189,15 @@ pub async fn import_openapi(spec_path: &str, folder_prefix: &str, create_env: bo
 pub async fn fire_request(request_id: &str, env_name: Option<&str>) -> Result<FiredResponse, String> {
     call("fire_request", FireArgs { request_id, env_name }).await
 }
+
+#[derive(Serialize)]
+struct RequestIdArg<'a> { #[serde(rename = "requestId")] request_id: &'a str }
+pub async fn duplicate_request(request_id: &str) -> Result<String, String> {
+    call("duplicate_request", RequestIdArg { request_id }).await
+}
+pub async fn delete_request(req: &Request) -> Result<(), String> {
+    call_unit("delete_request", RequestArg { req }).await
+}
+pub async fn to_curl(request_id: &str, env_name: Option<&str>) -> Result<String, String> {
+    call("to_curl", FireArgs { request_id, env_name }).await
+}

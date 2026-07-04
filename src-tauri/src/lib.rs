@@ -286,6 +286,81 @@ fn parse_curl(input: String) -> Result<Request, String> {
 }
 
 #[tauri::command]
+fn duplicate_request(state: State<AppState>, request_id: String) -> Result<String, String> {
+    let coll = state.collection.lock().unwrap();
+    let c = coll.as_ref().ok_or_else(|| "collection not loaded".to_string())?;
+    let src = c.requests.iter().find(|r| r.id == request_id)
+        .ok_or_else(|| format!("not found: {}", request_id))?
+        .clone();
+    drop(coll);
+
+    let src_path = std::path::PathBuf::from(&src.path);
+    let dir = src_path.parent().ok_or_else(|| "no parent dir".to_string())?;
+    let stem = src_path.file_stem().and_then(|s| s.to_str()).unwrap_or("copy");
+    let mut n = 1;
+    let new_path = loop {
+        let candidate = dir.join(format!("{}-copy{}.yml", stem, if n == 1 { String::new() } else { n.to_string() }));
+        if !candidate.exists() { break candidate; }
+        n += 1;
+        if n > 100 { return Err("too many copies".into()); }
+    };
+    let mut new_req = src.clone();
+    new_req.info.name = format!("{} (copy)", src.info.name);
+    new_req.path = new_path.to_string_lossy().to_string();
+    new_req.rel_path = String::new();
+    new_req.id = String::new();
+    loader::write_request(&new_req)?;
+    Ok(new_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn to_curl(state: State<AppState>, request_id: String, env_name: Option<String>) -> Result<String, String> {
+    let (req, env) = {
+        let coll = state.collection.lock().unwrap();
+        let c = coll.as_ref().ok_or_else(|| "collection not loaded".to_string())?;
+        let req = c.requests.iter().find(|r| r.id == request_id)
+            .cloned()
+            .ok_or_else(|| format!("not found: {}", request_id))?;
+        let env = env_name.and_then(|n| c.envs.iter().find(|e| e.name == n).cloned());
+        (req, env)
+    };
+    let vault_data = if state.vault.password.lock().unwrap().is_some() {
+        ensure_cache(&state)?;
+        state.vault.cache.lock().unwrap().clone()
+    } else { None };
+    let vars = env.as_ref().map(|e| http::resolve_env_vars(e, vault_data.as_ref())).unwrap_or_default();
+    Ok(build_curl(&req, &vars))
+}
+
+fn shell_escape(s: &str) -> String {
+    // wrap in single quotes; embed literal quotes via '\''
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+fn build_curl(req: &Request, vars: &std::collections::HashMap<String, String>) -> String {
+    let (url, _) = http::substitute(&req.http.url, vars);
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(format!("curl -X {} {}", req.http.method.to_uppercase(), shell_escape(&url)));
+    for h in &req.http.headers {
+        if h.enabled == Some(false) { continue; }
+        let (v, _) = http::substitute(&h.value, vars);
+        lines.push(format!("  -H {}", shell_escape(&format!("{}: {}", h.name, v))));
+    }
+    if let Some(body_type) = req.http.body.r#type.as_deref() {
+        let raw = req.http.body.data.as_deref()
+            .or(req.http.body.json.as_deref())
+            .or(req.http.body.text.as_deref())
+            .unwrap_or("");
+        if !raw.is_empty() {
+            let (b, _) = http::substitute(raw, vars);
+            let flag = if body_type == "json" { "--data" } else { "--data" };
+            lines.push(format!("  {} {}", flag, shell_escape(&b)));
+        }
+    }
+    lines.join(" \\\n")
+}
+
+#[tauri::command]
 fn preview_openapi(spec_path: String) -> Result<openapi::ImportPreview, String> {
     openapi::preview(std::path::Path::new(&spec_path))
 }
@@ -385,6 +460,8 @@ pub fn run() {
             import_curl,
             preview_openapi,
             import_openapi,
+            duplicate_request,
+            to_curl,
             fire_request,
         ])
         .run(tauri::generate_context!())
