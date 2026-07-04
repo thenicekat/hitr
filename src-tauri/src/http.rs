@@ -125,19 +125,30 @@ pub async fn fire(req: &Request, env: Option<&Env>, vault_data: Option<&VaultDat
     }
 
     if let Some(body_type) = req.http.body.r#type.as_deref() {
+        // Bruno's on-disk yml stores the body under `body.data` regardless of
+        // type. Some newer variants use `body.json` / `body.text`. Take
+        // whichever field is populated.
         let raw = match body_type {
-            "json" => req.http.body.json.clone().unwrap_or_default(),
-            "text" => req.http.body.text.clone().unwrap_or_default(),
+            "json" => req.http.body.json.clone()
+                .filter(|s| !s.is_empty())
+                .or_else(|| req.http.body.data.clone())
+                .unwrap_or_default(),
+            "text" => req.http.body.text.clone()
+                .filter(|s| !s.is_empty())
+                .or_else(|| req.http.body.data.clone())
+                .unwrap_or_default(),
             _ => req.http.body.data.clone().unwrap_or_default(),
         };
         if !raw.is_empty() {
             let (sub, miss) = substitute(&raw, &vars);
             for m in miss { all_missing.insert(m); }
-            if body_type == "json" {
-                rb = rb.header("Content-Type", "application/json").body(sub);
-            } else {
-                rb = rb.body(sub);
+            let has_ct = req.http.headers.iter().any(|h| {
+                h.enabled != Some(false) && h.name.eq_ignore_ascii_case("content-type")
+            });
+            if body_type == "json" && !has_ct {
+                rb = rb.header("Content-Type", "application/json");
             }
+            rb = rb.body(sub);
         }
     }
 
