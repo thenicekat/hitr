@@ -911,49 +911,69 @@ fn RequestEditor(
     let mut params = use_signal(|| req.http.params.clone());
     let mut body_type = use_signal(|| req.http.body.kind.clone().unwrap_or_default());
     let mut body_text = use_signal(|| {
-        match body_type.peek().as_str() {
-            "json" => req.http.body.json.clone().unwrap_or_default(),
-            "text" => req.http.body.text.clone().unwrap_or_default(),
-            _ => req.http.body.data.clone().unwrap_or_default(),
-        }
+        // Bruno stores body under `data`; older aptui saves used `json`/`text`.
+        // Prefer whichever is non-empty.
+        let b = &req.http.body;
+        let candidates = match body_type.peek().as_str() {
+            "json" => [&b.json, &b.data, &b.text],
+            "text" => [&b.text, &b.data, &b.json],
+            _ => [&b.data, &b.json, &b.text],
+        };
+        candidates.iter()
+            .find_map(|f| f.as_ref().filter(|s| !s.is_empty()).cloned())
+            .unwrap_or_default()
     });
     let mut tab = use_signal(|| EditorTab::Body);
     let mut save_err = use_signal(|| None::<String>);
-    let mut dirty = use_signal(|| false);
+    // Bumped on every user edit. The debounced task snapshots the value on
+    // spawn and re-checks after sleeping — if it changed, another edit
+    // arrived and this task's save is stale, so it bails.
+    let mut save_gen = use_signal(|| 0usize);
+    // "saving..." indicator, on when a save is in flight.
+    let mut saving = use_signal(|| false);
 
     let orig = req.clone();
-    let save = move |_| {
-        let mut updated = orig.clone();
-        updated.http.method = method.read().clone();
-        updated.http.url = url.read().clone();
-        updated.http.headers = headers.read().clone();
-        updated.http.params = params.read().clone();
-        let bt = body_type.read().clone();
-        let bx = body_text.read().clone();
-        updated.http.body = Body {
-            kind: if bt.is_empty() { None } else { Some(bt.clone()) },
-            json: if bt == "json" && !bx.is_empty() { Some(bx.clone()) } else { None },
-            text: if bt == "text" && !bx.is_empty() { Some(bx.clone()) } else { None },
-            data: None,
-        };
+    let mut bump = move || { let n = *save_gen.peek() + 1; save_gen.set(n); };
+
+    // Autosave: react to save_gen. Wait 500ms. If save_gen changed during the
+    // wait, another edit came in — do nothing (that later task will save).
+    // Skip the very first fire (component mount, no user edit).
+    let orig_for_effect = orig.clone();
+    use_effect(move || {
+        let stamp = *save_gen.read();
+        if stamp == 0 { return; }
+        let orig = orig_for_effect.clone();
         spawn(async move {
+            gloo_timers::future::TimeoutFuture::new(500).await;
+            if *save_gen.peek() != stamp { return; }
+            let mut updated = orig;
+            updated.http.method = method.peek().clone();
+            updated.http.url = url.peek().clone();
+            updated.http.headers = headers.peek().clone();
+            updated.http.params = params.peek().clone();
+            let bt = body_type.peek().clone();
+            let bx = body_text.peek().clone();
+            updated.http.body = Body {
+                kind: if bt.is_empty() { None } else { Some(bt.clone()) },
+                json: None,
+                text: None,
+                data: if !bt.is_empty() && !bx.is_empty() { Some(bx.clone()) } else { None },
+            };
+            saving.set(true);
             match api::save_request(&updated).await {
-                Ok(_) => {
-                    dirty.set(false);
-                    save_err.set(None);
-                    on_saved.call(());
-                }
+                Ok(_) => { save_err.set(None); on_saved.call(()); }
                 Err(e) => save_err.set(Some(e)),
             }
+            saving.set(false);
         });
-    };
+    });
 
     rsx! {
         div { class: "req-editor",
             div { class: "req-line",
                 select {
                     class: "method-select method-{method.read().to_lowercase()}",
-                    onchange: move |e| { method.set(e.value()); dirty.set(true); },
+                    onchange: move |e| { method.set(e.value()); bump(); },
                     for m in ["GET","POST","PUT","PATCH","DELETE","HEAD","OPTIONS"].iter() {
                         option { value: "{m}", selected: method.read().as_str() == *m, "{m}" }
                     }
@@ -961,11 +981,11 @@ fn RequestEditor(
                 input {
                     class: "url-input",
                     value: "{url}",
-                    oninput: move |e| { url.set(e.value()); dirty.set(true); },
+                    oninput: move |e| { url.set(e.value()); bump(); },
                     placeholder: "{{baseUrl}}/path"
                 }
-                if *dirty.read() {
-                    button { class: "btn small", onclick: save, "save" }
+                if *saving.read() {
+                    span { class: "muted small", "saving…" }
                 }
                 button {
                     class: if firing { "btn primary disabled" } else { "btn primary" },
@@ -998,8 +1018,8 @@ fn RequestEditor(
             }
             div { class: "req-tab-body",
                 match *tab.read() {
-                    EditorTab::Params => rsx! { KVEditor { items: params, on_change: move |_| dirty.set(true) } },
-                    EditorTab::Headers => rsx! { KVEditor { items: headers, on_change: move |_| dirty.set(true) } },
+                    EditorTab::Params => rsx! { KVEditor { items: params, on_change: move |_| bump() } },
+                    EditorTab::Headers => rsx! { KVEditor { items: headers, on_change: move |_| bump() } },
                     EditorTab::Body => rsx! {
                         div { class: "body-editor",
                             div { class: "body-type-row",
@@ -1009,7 +1029,7 @@ fn RequestEditor(
                                         class: if body_type.read().as_str() == *t || (t == &"none" && body_type.read().is_empty()) { "tab active" } else { "tab" },
                                         onclick: move |_| {
                                             body_type.set(if *t == "none" { String::new() } else { t.to_string() });
-                                            dirty.set(true);
+                                            bump();
                                         },
                                         "{t}"
                                     }
@@ -1023,7 +1043,7 @@ fn RequestEditor(
                                                 Ok(v) => {
                                                     if let Ok(pretty) = serde_json::to_string_pretty(&v) {
                                                         body_text.set(pretty);
-                                                        dirty.set(true);
+                                                        bump();
                                                     }
                                                 }
                                                 Err(_) => save_err.set(Some("invalid JSON".into())),
@@ -1038,7 +1058,7 @@ fn RequestEditor(
                                     class: "body-text",
                                     spellcheck: false,
                                     value: "{body_text}",
-                                    oninput: move |e| { body_text.set(e.value()); dirty.set(true); },
+                                    oninput: move |e| { body_text.set(e.value()); bump(); },
                                     placeholder: "request body…"
                                 }
                             } else {
