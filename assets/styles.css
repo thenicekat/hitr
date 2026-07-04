@@ -205,12 +205,11 @@ body { overflow: hidden; }
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 20px;
-  min-width: 380px;
-  max-width: 640px;
-  max-height: 80vh;
+  width: min(640px, 92vw);
+  max-height: 85vh;
   overflow-y: auto;
 }
-.modal.wide { min-width: 640px; }
+.modal.wide { width: min(760px, 92vw); }
 .modal h3 { margin: 0 0 16px 0; }
 .modal label { display: block; margin: 12px 0 4px; font-size: 11px; text-transform: uppercase; color: var(--fg-dim); letter-spacing: 0.5px; }
 .modal input, .modal select {
