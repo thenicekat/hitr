@@ -107,6 +107,7 @@ dependencies = [
  "age",
  "directories",
  "hex",
+ "openapiv3",
  "reqwest 0.12.28",
  "secrecy",
  "serde",
@@ -129,6 +130,7 @@ dependencies = [
  "console_error_panic_hook",
  "dioxus",
  "dioxus-logger",
+ "gloo-timers",
  "js-sys",
  "serde",
  "serde-wasm-bindgen",
@@ -3815,6 +3817,17 @@ dependencies = [
  "dunce",
  "is-wsl",
  "libc",
+]
+
+[[package]]
+name = "openapiv3"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c8d427828b22ae1fff2833a03d8486c2c881367f1c336349f307f321e7f4d05"
+dependencies = [
+ "indexmap 2.14.0",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

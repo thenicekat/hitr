@@ -112,6 +112,7 @@ enum Modal {
     EditEnv,
     NewRequest,
     ImportCurl,
+    ImportOpenApi,
 }
 
 pub fn App() -> Element {
@@ -332,6 +333,7 @@ pub fn App() -> Element {
                             }
                         }
                         button { class: "btn small", onclick: move |_| modal.set(Modal::ImportCurl), "curl" }
+                        button { class: "btn small", onclick: move |_| modal.set(Modal::ImportOpenApi), "openapi" }
                         button { class: "btn small", onclick: move |_| modal.set(Modal::NewRequest), "+" }
                     }
                     div { class: "list",
@@ -414,6 +416,9 @@ pub fn App() -> Element {
                         NewRequestModal { default_folder, on_close: move |_| { modal.set(Modal::None); load_all.call(()); } }
                     }
                 }
+                Modal::ImportOpenApi => rsx! {
+                    ImportOpenApiModal { on_close: move |_| { modal.set(Modal::None); load_all.call(()); } }
+                },
                 Modal::ImportCurl => {
                     let default_folder = selected_req_obj.read().as_ref().and_then(|r| {
                         std::path::Path::new(&r.rel_path).parent().and_then(|p| p.to_str()).map(String::from)
@@ -889,6 +894,143 @@ fn ImportCurlModal(default_folder: String, on_close: EventHandler<()>) -> Elemen
             }
         }
     }
+}
+
+#[component]
+fn ImportOpenApiModal(on_close: EventHandler<()>) -> Element {
+    let mut spec_path = use_signal(String::new);
+    let mut folder_prefix = use_signal(|| "openapi".to_string());
+    let mut env_name = use_signal(String::new);
+    let mut create_env = use_signal(|| true);
+    let mut preview = use_signal(|| None::<ImportPreview>);
+    let mut err = use_signal(|| None::<String>);
+    let mut busy = use_signal(|| false);
+
+    let do_preview = move |_| {
+        let p = spec_path.read().clone();
+        if p.trim().is_empty() { err.set(Some("spec path required".into())); return; }
+        busy.set(true);
+        spawn(async move {
+            match api::preview_openapi(&p).await {
+                Ok(pv) => {
+                    if env_name.peek().is_empty() {
+                        env_name.set(slug_env(&pv.title));
+                    }
+                    preview.set(Some(pv));
+                    err.set(None);
+                }
+                Err(e) => { preview.set(None); err.set(Some(e)); }
+            }
+            busy.set(false);
+        });
+    };
+
+    let do_import = move |_| {
+        let p = spec_path.read().clone();
+        let fp = folder_prefix.read().clone();
+        let ce = *create_env.read();
+        let en = env_name.read().clone();
+        if preview.peek().is_none() { err.set(Some("preview first".into())); return; }
+        busy.set(true);
+        spawn(async move {
+            match api::import_openapi(&p, &fp, ce, &en).await {
+                Ok(_) => on_close.call(()),
+                Err(e) => err.set(Some(e)),
+            }
+            busy.set(false);
+        });
+    };
+
+    rsx! {
+        div { class: "modal-bg",
+            div { class: "modal wide",
+                h3 { "import openapi spec" }
+                label { "spec path (yaml or json, absolute)" }
+                input {
+                    autofocus: true,
+                    value: "{spec_path}",
+                    oninput: move |e| spec_path.set(e.value()),
+                    placeholder: "/path/to/openapi.yaml"
+                }
+                div { class: "modal-actions", style: "justify-content: flex-start; margin-top: 8px;",
+                    button {
+                        class: if *busy.read() { "btn small disabled" } else { "btn small" },
+                        disabled: *busy.read(),
+                        onclick: do_preview,
+                        "preview"
+                    }
+                }
+                if let Some(pv) = preview.read().as_ref() {
+                    div { class: "muted small",
+                        "{pv.title} v{pv.version}  ·  {pv.op_count} ops across {pv.folder_count} folders"
+                    }
+                    if !pv.suggested_vars.is_empty() {
+                        div { class: "muted small",
+                            "vars: "
+                            for (i, v) in pv.suggested_vars.iter().enumerate() {
+                                if i > 0 { ", " }
+                                span { "{v.name}" }
+                                if v.secret { " (secret)" }
+                            }
+                        }
+                    }
+                    if !pv.sample_ops.is_empty() {
+                        details { class: "headers",
+                            summary { "sample operations ({pv.sample_ops.len()})" }
+                            for op in pv.sample_ops.iter() {
+                                div { class: "hdr",
+                                    span { class: "hdr-k", "{op.method} {op.folder}" }
+                                    span { class: "hdr-v", "{op.path}" }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                label { "folder prefix (relative to collection root)" }
+                input {
+                    value: "{folder_prefix}",
+                    oninput: move |e| folder_prefix.set(e.value()),
+                    placeholder: "openapi"
+                }
+
+                div { style: "display: flex; align-items: center; gap: 8px; margin-top: 12px;",
+                    input {
+                        r#type: "checkbox",
+                        checked: *create_env.read(),
+                        onchange: move |e| create_env.set(e.checked()),
+                    }
+                    span { class: "small", "create env with suggested vars" }
+                }
+                if *create_env.read() {
+                    label { "env name" }
+                    input {
+                        value: "{env_name}",
+                        oninput: move |e| env_name.set(e.value()),
+                    }
+                }
+
+                if let Some(e) = err.read().as_ref() { div { class: "error", "{e}" } }
+                div { class: "modal-actions",
+                    button { class: "btn", onclick: move |_| on_close.call(()), "cancel" }
+                    button {
+                        class: if *busy.read() { "btn primary disabled" } else { "btn primary" },
+                        disabled: *busy.read(),
+                        onclick: do_import,
+                        if *busy.read() { "importing…" } else { "import" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn slug_env(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

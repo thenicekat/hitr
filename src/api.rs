@@ -167,6 +167,25 @@ struct ParseCurlArgs<'a> { input: &'a str }
 pub async fn parse_curl(input: &str) -> Result<Request, String> {
     call("parse_curl", ParseCurlArgs { input }).await
 }
+
+#[derive(Serialize)]
+struct PreviewOpenApiArgs<'a> {
+    #[serde(rename = "specPath")] spec_path: &'a str,
+}
+pub async fn preview_openapi(spec_path: &str) -> Result<ImportPreview, String> {
+    call("preview_openapi", PreviewOpenApiArgs { spec_path }).await
+}
+
+#[derive(Serialize)]
+struct ImportOpenApiArgs<'a> {
+    #[serde(rename = "specPath")] spec_path: &'a str,
+    #[serde(rename = "folderPrefix")] folder_prefix: &'a str,
+    #[serde(rename = "createEnv")] create_env: bool,
+    #[serde(rename = "envName")] env_name: &'a str,
+}
+pub async fn import_openapi(spec_path: &str, folder_prefix: &str, create_env: bool, env_name: &str) -> Result<ImportStats, String> {
+    call("import_openapi", ImportOpenApiArgs { spec_path, folder_prefix, create_env, env_name }).await
+}
 pub async fn fire_request(request_id: &str, env_name: Option<&str>) -> Result<FiredResponse, String> {
     call("fire_request", FireArgs { request_id, env_name }).await
 }

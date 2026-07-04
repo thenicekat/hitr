@@ -34,6 +34,7 @@ url = "2"
 age = { version = "0.11", features = ["armor"] }
 secrecy = "0.10"
 zeroize = "1"
+openapiv3 = "2"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

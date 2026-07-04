@@ -18,6 +18,7 @@ mod curl;
 mod http;
 mod loader;
 mod model;
+mod openapi;
 mod vault;
 
 use crate::model::*;
@@ -285,6 +286,23 @@ fn parse_curl(input: String) -> Result<Request, String> {
 }
 
 #[tauri::command]
+fn preview_openapi(spec_path: String) -> Result<openapi::ImportPreview, String> {
+    openapi::preview(std::path::Path::new(&spec_path))
+}
+
+#[tauri::command]
+fn import_openapi(
+    state: State<AppState>,
+    spec_path: String,
+    folder_prefix: String,
+    create_env: bool,
+    env_name: String,
+) -> Result<openapi::ImportStats, String> {
+    let root = state.root.lock().unwrap().clone();
+    openapi::import(&root, std::path::Path::new(&spec_path), &folder_prefix, create_env, &env_name)
+}
+
+#[tauri::command]
 fn import_curl(
     state: State<AppState>,
     input: String,
@@ -365,6 +383,8 @@ pub fn run() {
             delete_request,
             parse_curl,
             import_curl,
+            preview_openapi,
+            import_openapi,
             fire_request,
         ])
         .run(tauri::generate_context!())

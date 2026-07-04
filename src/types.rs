@@ -87,6 +87,43 @@ pub struct Collection {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
+pub struct SuggestedVar {
+    pub name: String,
+    pub secret: bool,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SampleOp {
+    pub method: String,
+    pub name: String,
+    pub folder: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ImportPreview {
+    pub title: String,
+    pub version: String,
+    pub op_count: usize,
+    pub folder_count: usize,
+    pub suggested_vars: Vec<SuggestedVar>,
+    pub sample_ops: Vec<SampleOp>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ImportStats {
+    pub written: usize,
+    pub skipped_existing: usize,
+    pub folder_prefix: String,
+    pub env_created: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct FiredResponse {
     pub status: u16,
     pub status_text: String,
