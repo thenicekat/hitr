@@ -44,6 +44,56 @@ pub fn resolve_env_vars(env: &Env, vault_data: Option<&VaultData>) -> HashMap<St
     out
 }
 
+/// Strip `//` line comments and `/*…*/` block comments from a JSON string,
+/// leaving strings intact. Comments inside string literals are preserved.
+/// State machine: track "inside-string" vs "inside-comment" flags, respect
+/// backslash escapes inside strings.
+pub fn strip_json_comments(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    let mut in_str = false;
+    let mut escape = false;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if in_str {
+            out.push(c as char);
+            if escape { escape = false; }
+            else if c == b'\\' { escape = true; }
+            else if c == b'"' { in_str = false; }
+            i += 1;
+            continue;
+        }
+        if c == b'"' {
+            in_str = true;
+            out.push('"');
+            i += 1;
+            continue;
+        }
+        if c == b'/' && i + 1 < bytes.len() {
+            match bytes[i + 1] {
+                b'/' => {
+                    // line comment: skip until newline (keep the newline)
+                    let mut j = i + 2;
+                    while j < bytes.len() && bytes[j] != b'\n' { j += 1; }
+                    i = j;
+                    continue;
+                }
+                b'*' => {
+                    let mut j = i + 2;
+                    while j + 1 < bytes.len() && !(bytes[j] == b'*' && bytes[j + 1] == b'/') { j += 1; }
+                    i = (j + 2).min(bytes.len());
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        out.push(c as char);
+        i += 1;
+    }
+    out
+}
+
 /// Replace `{{name}}` occurrences in `s` with values from `vars`. Returns
 /// the substituted string plus the list of var names that were unresolved
 /// (so the caller can surface them in an error message).
@@ -107,7 +157,19 @@ pub async fn fire(req: &Request, env: Option<&Env>, vault_data: Option<&VaultDat
         .map_err(|e| e.to_string())?;
 
     let m = reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| e.to_string())?;
-    let parsed = reqwest::Url::parse(&url).map_err(|e| format!("invalid url `{}`: {}", url, e))?;
+    let mut parsed = reqwest::Url::parse(&url).map_err(|e| format!("invalid url `{}`: {}", url, e))?;
+    // Append enabled params from the params tab. Existing query keys in the
+    // URL are left alone; params tab rows are added, so URL wins on conflict.
+    // Substitute {{var}} in each key/value first.
+    for p in &req.http.params {
+        if p.enabled == Some(false) { continue; }
+        if p.name.is_empty() { continue; }
+        let (k, mk) = substitute(&p.name, &vars);
+        let (v, mv) = substitute(&p.value, &vars);
+        for m in mk { all_missing.insert(m); }
+        for m in mv { all_missing.insert(m); }
+        parsed.query_pairs_mut().append_pair(&k, &v);
+    }
     let mut rb = client.request(m, parsed);
 
     for h in &req.http.headers {
@@ -140,7 +202,8 @@ pub async fn fire(req: &Request, env: Option<&Env>, vault_data: Option<&VaultDat
             _ => req.http.body.data.clone().unwrap_or_default(),
         };
         if !raw.is_empty() {
-            let (sub, miss) = substitute(&raw, &vars);
+            let cleaned = if body_type == "json" { strip_json_comments(&raw) } else { raw };
+            let (sub, miss) = substitute(&cleaned, &vars);
             for m in miss { all_missing.insert(m); }
             let has_ct = req.http.headers.iter().any(|h| {
                 h.enabled != Some(false) && h.name.eq_ignore_ascii_case("content-type")
