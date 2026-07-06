@@ -167,7 +167,9 @@ fn extract_params(op: &Operation, spec: &OpenAPI) -> (Vec<KV>, Vec<KV>) {
     let mut headers = Vec::new();
     let mut params = Vec::new();
     for p in &op.parameters {
-        let Some(p) = resolve_param(spec, p) else { continue };
+        let Some(p) = resolve_param(spec, p) else {
+            continue;
+        };
         let (name, kind) = match p {
             Parameter::Query { parameter_data, .. } => (&parameter_data.name, "query"),
             Parameter::Header { parameter_data, .. } => (&parameter_data.name, "header"),
@@ -225,7 +227,9 @@ fn suggested_vars(spec: &OpenAPI) -> Vec<SuggestedVar> {
         for (_, scheme) in &components.security_schemes {
             if let ReferenceOr::Item(s) = scheme {
                 match s {
-                    openapiv3::SecurityScheme::HTTP { scheme, .. } if scheme.eq_ignore_ascii_case("bearer") => {
+                    openapiv3::SecurityScheme::HTTP { scheme, .. }
+                        if scheme.eq_ignore_ascii_case("bearer") =>
+                    {
                         out.push(SuggestedVar {
                             name: "bearerToken".into(),
                             secret: true,

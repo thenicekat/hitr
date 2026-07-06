@@ -19,7 +19,10 @@ extern "C" {
     async fn invoke(cmd: &str, args: JsValue) -> Result<JsValue, JsValue>;
 }
 
-async fn call<T: for<'de> serde::Deserialize<'de>>(cmd: &str, args: impl Serialize) -> Result<T, String> {
+async fn call<T: for<'de> serde::Deserialize<'de>>(
+    cmd: &str,
+    args: impl Serialize,
+) -> Result<T, String> {
     let a = to_value(&args).map_err(|e| e.to_string())?;
     match invoke(cmd, a).await {
         Ok(v) => from_value(v).map_err(|e| e.to_string()),
@@ -132,7 +135,14 @@ pub async fn save_env(env: &Env) -> Result<(), String> {
     call_unit("save_env", EnvArg { env }).await
 }
 pub async fn create_env(name: &str, template_from: Option<&str>) -> Result<Env, String> {
-    call("create_env", CreateEnvArgs { name, template_from }).await
+    call(
+        "create_env",
+        CreateEnvArgs {
+            name,
+            template_from,
+        },
+    )
+    .await
 }
 #[derive(Serialize)]
 struct RenameEnvArgs<'a> {
@@ -150,8 +160,22 @@ pub async fn delete_env(env: &Env) -> Result<(), String> {
 pub async fn save_request(req: &Request) -> Result<(), String> {
     call_unit("save_request", RequestArg { req }).await
 }
-pub async fn create_request(folder: &str, name: &str, method: &str, url: &str) -> Result<String, String> {
-    call("create_request", CreateRequestArgs { folder, name, method, url }).await
+pub async fn create_request(
+    folder: &str,
+    name: &str,
+    method: &str,
+    url: &str,
+) -> Result<String, String> {
+    call(
+        "create_request",
+        CreateRequestArgs {
+            folder,
+            name,
+            method,
+            url,
+        },
+    )
+    .await
 }
 #[derive(Serialize)]
 struct ImportCurlArgs<'a> {
@@ -160,17 +184,28 @@ struct ImportCurlArgs<'a> {
     name: &'a str,
 }
 pub async fn import_curl(input: &str, folder: &str, name: &str) -> Result<String, String> {
-    call("import_curl", ImportCurlArgs { input, folder, name }).await
+    call(
+        "import_curl",
+        ImportCurlArgs {
+            input,
+            folder,
+            name,
+        },
+    )
+    .await
 }
 #[derive(Serialize)]
-struct ParseCurlArgs<'a> { input: &'a str }
+struct ParseCurlArgs<'a> {
+    input: &'a str,
+}
 pub async fn parse_curl(input: &str) -> Result<Request, String> {
     call("parse_curl", ParseCurlArgs { input }).await
 }
 
 #[derive(Serialize)]
 struct PreviewOpenApiArgs<'a> {
-    #[serde(rename = "specPath")] spec_path: &'a str,
+    #[serde(rename = "specPath")]
+    spec_path: &'a str,
 }
 pub async fn preview_openapi(spec_path: &str) -> Result<ImportPreview, String> {
     call("preview_openapi", PreviewOpenApiArgs { spec_path }).await
@@ -178,20 +213,51 @@ pub async fn preview_openapi(spec_path: &str) -> Result<ImportPreview, String> {
 
 #[derive(Serialize)]
 struct ImportOpenApiArgs<'a> {
-    #[serde(rename = "specPath")] spec_path: &'a str,
-    #[serde(rename = "folderPrefix")] folder_prefix: &'a str,
-    #[serde(rename = "createEnv")] create_env: bool,
-    #[serde(rename = "envName")] env_name: &'a str,
+    #[serde(rename = "specPath")]
+    spec_path: &'a str,
+    #[serde(rename = "folderPrefix")]
+    folder_prefix: &'a str,
+    #[serde(rename = "createEnv")]
+    create_env: bool,
+    #[serde(rename = "envName")]
+    env_name: &'a str,
 }
-pub async fn import_openapi(spec_path: &str, folder_prefix: &str, create_env: bool, env_name: &str) -> Result<ImportStats, String> {
-    call("import_openapi", ImportOpenApiArgs { spec_path, folder_prefix, create_env, env_name }).await
+pub async fn import_openapi(
+    spec_path: &str,
+    folder_prefix: &str,
+    create_env: bool,
+    env_name: &str,
+) -> Result<ImportStats, String> {
+    call(
+        "import_openapi",
+        ImportOpenApiArgs {
+            spec_path,
+            folder_prefix,
+            create_env,
+            env_name,
+        },
+    )
+    .await
 }
-pub async fn fire_request(request_id: &str, env_name: Option<&str>) -> Result<FiredResponse, String> {
-    call("fire_request", FireArgs { request_id, env_name }).await
+pub async fn fire_request(
+    request_id: &str,
+    env_name: Option<&str>,
+) -> Result<FiredResponse, String> {
+    call(
+        "fire_request",
+        FireArgs {
+            request_id,
+            env_name,
+        },
+    )
+    .await
 }
 
 #[derive(Serialize)]
-struct RequestIdArg<'a> { #[serde(rename = "requestId")] request_id: &'a str }
+struct RequestIdArg<'a> {
+    #[serde(rename = "requestId")]
+    request_id: &'a str,
+}
 pub async fn duplicate_request(request_id: &str) -> Result<String, String> {
     call("duplicate_request", RequestIdArg { request_id }).await
 }
@@ -199,5 +265,12 @@ pub async fn delete_request(req: &Request) -> Result<(), String> {
     call_unit("delete_request", RequestArg { req }).await
 }
 pub async fn to_curl(request_id: &str, env_name: Option<&str>) -> Result<String, String> {
-    call("to_curl", FireArgs { request_id, env_name }).await
+    call(
+        "to_curl",
+        FireArgs {
+            request_id,
+            env_name,
+        },
+    )
+    .await
 }

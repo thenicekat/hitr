@@ -58,9 +58,13 @@ pub fn strip_json_comments(s: &str) -> String {
         let c = bytes[i];
         if in_str {
             out.push(c as char);
-            if escape { escape = false; }
-            else if c == b'\\' { escape = true; }
-            else if c == b'"' { in_str = false; }
+            if escape {
+                escape = false;
+            } else if c == b'\\' {
+                escape = true;
+            } else if c == b'"' {
+                in_str = false;
+            }
             i += 1;
             continue;
         }
@@ -75,13 +79,17 @@ pub fn strip_json_comments(s: &str) -> String {
                 b'/' => {
                     // line comment: skip until newline (keep the newline)
                     let mut j = i + 2;
-                    while j < bytes.len() && bytes[j] != b'\n' { j += 1; }
+                    while j < bytes.len() && bytes[j] != b'\n' {
+                        j += 1;
+                    }
                     i = j;
                     continue;
                 }
                 b'*' => {
                     let mut j = i + 2;
-                    while j + 1 < bytes.len() && !(bytes[j] == b'*' && bytes[j + 1] == b'/') { j += 1; }
+                    while j + 1 < bytes.len() && !(bytes[j] == b'*' && bytes[j + 1] == b'/') {
+                        j += 1;
+                    }
                     i = (j + 2).min(bytes.len());
                     continue;
                 }
@@ -135,12 +143,20 @@ pub fn substitute(s: &str, vars: &HashMap<String, String>) -> (String, Vec<Strin
 ///
 /// Fails early with a specific message if the URL contains any unresolved
 /// `{{var}}` — reqwest's own "builder error" is opaque and unhelpful.
-pub async fn fire(req: &Request, env: Option<&Env>, vault_data: Option<&VaultData>) -> Result<FiredResponse, String> {
-    let vars = env.map(|e| resolve_env_vars(e, vault_data)).unwrap_or_default();
+pub async fn fire(
+    req: &Request,
+    env: Option<&Env>,
+    vault_data: Option<&VaultData>,
+) -> Result<FiredResponse, String> {
+    let vars = env
+        .map(|e| resolve_env_vars(e, vault_data))
+        .unwrap_or_default();
     let mut all_missing = std::collections::BTreeSet::new();
 
     let (url, miss) = substitute(&req.http.url, &vars);
-    for m in miss { all_missing.insert(m); }
+    for m in miss {
+        all_missing.insert(m);
+    }
 
     if url.contains("{{") {
         return Err(format!(
@@ -157,17 +173,26 @@ pub async fn fire(req: &Request, env: Option<&Env>, vault_data: Option<&VaultDat
         .map_err(|e| e.to_string())?;
 
     let m = reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| e.to_string())?;
-    let mut parsed = reqwest::Url::parse(&url).map_err(|e| format!("invalid url `{}`: {}", url, e))?;
+    let mut parsed =
+        reqwest::Url::parse(&url).map_err(|e| format!("invalid url `{}`: {}", url, e))?;
     // Append enabled params from the params tab. Existing query keys in the
     // URL are left alone; params tab rows are added, so URL wins on conflict.
     // Substitute {{var}} in each key/value first.
     for p in &req.http.params {
-        if p.enabled == Some(false) { continue; }
-        if p.name.is_empty() { continue; }
+        if p.enabled == Some(false) {
+            continue;
+        }
+        if p.name.is_empty() {
+            continue;
+        }
         let (k, mk) = substitute(&p.name, &vars);
         let (v, mv) = substitute(&p.value, &vars);
-        for m in mk { all_missing.insert(m); }
-        for m in mv { all_missing.insert(m); }
+        for m in mk {
+            all_missing.insert(m);
+        }
+        for m in mv {
+            all_missing.insert(m);
+        }
         parsed.query_pairs_mut().append_pair(&k, &v);
     }
     let mut rb = client.request(m, parsed);
@@ -177,11 +202,18 @@ pub async fn fire(req: &Request, env: Option<&Env>, vault_data: Option<&VaultDat
             continue;
         }
         let (val, miss) = substitute(&h.value, &vars);
-        for m in miss { all_missing.insert(m); }
+        for m in miss {
+            all_missing.insert(m);
+        }
         rb = rb.header(&h.name, val);
     }
     if let Some(bearer) = vars.get("bearerToken") {
-        if !req.http.headers.iter().any(|h| h.name.eq_ignore_ascii_case("authorization")) {
+        if !req
+            .http
+            .headers
+            .iter()
+            .any(|h| h.name.eq_ignore_ascii_case("authorization"))
+        {
             rb = rb.header("Authorization", format!("Bearer {}", bearer));
         }
     }
@@ -191,23 +223,38 @@ pub async fn fire(req: &Request, env: Option<&Env>, vault_data: Option<&VaultDat
         // type. Some newer variants use `body.json` / `body.text`. Take
         // whichever field is populated.
         let raw = match body_type {
-            "json" => req.http.body.json.clone()
+            "json" => req
+                .http
+                .body
+                .json
+                .clone()
                 .filter(|s| !s.is_empty())
                 .or_else(|| req.http.body.data.clone())
                 .unwrap_or_default(),
-            "text" => req.http.body.text.clone()
+            "text" => req
+                .http
+                .body
+                .text
+                .clone()
                 .filter(|s| !s.is_empty())
                 .or_else(|| req.http.body.data.clone())
                 .unwrap_or_default(),
             _ => req.http.body.data.clone().unwrap_or_default(),
         };
         if !raw.is_empty() {
-            let cleaned = if body_type == "json" { strip_json_comments(&raw) } else { raw };
+            let cleaned = if body_type == "json" {
+                strip_json_comments(&raw)
+            } else {
+                raw
+            };
             let (sub, miss) = substitute(&cleaned, &vars);
-            for m in miss { all_missing.insert(m); }
-            let has_ct = req.http.headers.iter().any(|h| {
-                h.enabled != Some(false) && h.name.eq_ignore_ascii_case("content-type")
-            });
+            for m in miss {
+                all_missing.insert(m);
+            }
+            let has_ct =
+                req.http.headers.iter().any(|h| {
+                    h.enabled != Some(false) && h.name.eq_ignore_ascii_case("content-type")
+                });
             if body_type == "json" && !has_ct {
                 rb = rb.header("Content-Type", "application/json");
             }

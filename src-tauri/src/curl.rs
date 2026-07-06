@@ -28,14 +28,18 @@ fn tokenize(input: &str) -> Result<Vec<String>, String> {
             '\\' if in_double => {
                 if let Some(&nx) = chars.peek() {
                     match nx {
-                        '"' | '\\' | '$' | '`' | '\n' => { cur.push(chars.next().unwrap()); }
+                        '"' | '\\' | '$' | '`' | '\n' => {
+                            cur.push(chars.next().unwrap());
+                        }
                         _ => cur.push(c),
                     }
                 }
             }
             '\\' if !in_single && !in_double => {
                 if let Some(nx) = chars.next() {
-                    if nx != '\n' { cur.push(nx); }
+                    if nx != '\n' {
+                        cur.push(nx);
+                    }
                 }
             }
             c if c.is_whitespace() && !in_single && !in_double => {
@@ -49,7 +53,9 @@ fn tokenize(input: &str) -> Result<Vec<String>, String> {
     if in_single || in_double {
         return Err("unclosed quote".into());
     }
-    if !cur.is_empty() { out.push(cur); }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
     Ok(out)
 }
 
@@ -102,7 +108,10 @@ pub fn parse_curl(input: &str) -> Result<Request, String> {
                 if let Some(d) = tokens.next() {
                     body_data = Some(d);
                     body_kind = "json";
-                    if !headers.iter().any(|h| h.name.eq_ignore_ascii_case("content-type")) {
+                    if !headers
+                        .iter()
+                        .any(|h| h.name.eq_ignore_ascii_case("content-type"))
+                    {
                         headers.push(KV {
                             name: "Content-Type".into(),
                             value: "application/json".into(),
@@ -114,17 +123,19 @@ pub fn parse_curl(input: &str) -> Result<Request, String> {
                 }
             }
             "--url" => {
-                if let Some(u) = tokens.next() { url = Some(u); }
+                if let Some(u) = tokens.next() {
+                    url = Some(u);
+                }
             }
-            "-u" | "--user" => { let _ = tokens.next(); }
-            "--compressed" | "-i" | "-s" | "-S" | "-L" | "-k"
-            | "--insecure" | "-v" | "--verbose" | "-4" | "-6"
-            | "-#" | "--progress-bar" | "-N" | "--no-buffer" | "-g"
+            "-u" | "--user" => {
+                let _ = tokens.next();
+            }
+            "--compressed" | "-i" | "-s" | "-S" | "-L" | "-k" | "--insecure" | "-v"
+            | "--verbose" | "-4" | "-6" | "-#" | "--progress-bar" | "-N" | "--no-buffer" | "-g"
             | "--globoff" | "-o" | "-O" => {}
             "-A" | "--user-agent" | "-e" | "--referer" | "-b" | "--cookie"
-            | "--connect-timeout" | "--max-time" | "--proxy" | "-x"
-            | "-o " | "-O " | "--output" | "--upload-file" | "-T"
-            | "--cacert" | "--cert" | "--key" => {
+            | "--connect-timeout" | "--max-time" | "--proxy" | "-x" | "-o " | "-O "
+            | "--output" | "--upload-file" | "-T" | "--cacert" | "--cert" | "--key" => {
                 let _ = tokens.next();
             }
             arg if arg.starts_with('-') => {
@@ -152,14 +163,26 @@ pub fn parse_curl(input: &str) -> Result<Request, String> {
 
     // infer method: -d implies POST unless -X specified
     let method = method.unwrap_or_else(|| {
-        if body_data.is_some() { "POST".into() } else { "GET".into() }
+        if body_data.is_some() {
+            "POST".into()
+        } else {
+            "GET".into()
+        }
     });
 
     let body = if let Some(data) = body_data.clone() {
         Body {
             r#type: Some(body_kind.to_string()),
-            json: if body_kind == "json" { Some(data.clone()) } else { None },
-            text: if body_kind == "text" { Some(data) } else { None },
+            json: if body_kind == "json" {
+                Some(data.clone())
+            } else {
+                None
+            },
+            text: if body_kind == "text" {
+                Some(data)
+            } else {
+                None
+            },
             data: None,
         }
     } else {
@@ -167,7 +190,11 @@ pub fn parse_curl(input: &str) -> Result<Request, String> {
     };
 
     Ok(Request {
-        info: Info { name: String::new(), r#type: "http".into(), seq: 1 },
+        info: Info {
+            name: String::new(),
+            r#type: "http".into(),
+            seq: 1,
+        },
         http: HttpSpec {
             method,
             url,

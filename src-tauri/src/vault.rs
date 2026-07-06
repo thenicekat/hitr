@@ -77,7 +77,9 @@ pub fn read_encrypted(password: &SecretString) -> Result<VaultData, String> {
         .decrypt(std::iter::once(&identity as &dyn age::Identity))
         .map_err(|e| format!("wrong password or corrupt vault: {}", e))?;
     let mut plaintext = Vec::new();
-    reader.read_to_end(&mut plaintext).map_err(|e| e.to_string())?;
+    reader
+        .read_to_end(&mut plaintext)
+        .map_err(|e| e.to_string())?;
     if plaintext.is_empty() {
         return Ok(VaultData::default());
     }

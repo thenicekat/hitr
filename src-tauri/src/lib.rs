@@ -138,7 +138,12 @@ fn get_secret(state: State<AppState>, env: String, name: String) -> Result<Optio
 }
 
 #[tauri::command]
-fn set_secret(state: State<AppState>, env: String, name: String, value: String) -> Result<(), String> {
+fn set_secret(
+    state: State<AppState>,
+    env: String,
+    name: String,
+    value: String,
+) -> Result<(), String> {
     ensure_cache(&state)?;
     let pw = require_password(&state)?;
     let mut cache = state.vault.cache.lock().unwrap();
@@ -211,7 +216,11 @@ fn rename_env(state: State<AppState>, old_name: String, new_name: String) -> Res
 }
 
 #[tauri::command]
-fn create_env(state: State<AppState>, name: String, template_from: Option<String>) -> Result<Env, String> {
+fn create_env(
+    state: State<AppState>,
+    name: String,
+    template_from: Option<String>,
+) -> Result<Env, String> {
     let root = state.root.lock().unwrap().clone();
     let dir = root.join("environments");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -288,21 +297,39 @@ fn parse_curl(input: String) -> Result<Request, String> {
 #[tauri::command]
 fn duplicate_request(state: State<AppState>, request_id: String) -> Result<String, String> {
     let coll = state.collection.lock().unwrap();
-    let c = coll.as_ref().ok_or_else(|| "collection not loaded".to_string())?;
-    let src = c.requests.iter().find(|r| r.id == request_id)
+    let c = coll
+        .as_ref()
+        .ok_or_else(|| "collection not loaded".to_string())?;
+    let src = c
+        .requests
+        .iter()
+        .find(|r| r.id == request_id)
         .ok_or_else(|| format!("not found: {}", request_id))?
         .clone();
     drop(coll);
 
     let src_path = std::path::PathBuf::from(&src.path);
-    let dir = src_path.parent().ok_or_else(|| "no parent dir".to_string())?;
-    let stem = src_path.file_stem().and_then(|s| s.to_str()).unwrap_or("copy");
+    let dir = src_path
+        .parent()
+        .ok_or_else(|| "no parent dir".to_string())?;
+    let stem = src_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("copy");
     let mut n = 1;
     let new_path = loop {
-        let candidate = dir.join(format!("{}-copy{}.yml", stem, if n == 1 { String::new() } else { n.to_string() }));
-        if !candidate.exists() { break candidate; }
+        let candidate = dir.join(format!(
+            "{}-copy{}.yml",
+            stem,
+            if n == 1 { String::new() } else { n.to_string() }
+        ));
+        if !candidate.exists() {
+            break candidate;
+        }
         n += 1;
-        if n > 100 { return Err("too many copies".into()); }
+        if n > 100 {
+            return Err("too many copies".into());
+        }
     };
     let mut new_req = src.clone();
     new_req.info.name = format!("{} (copy)", src.info.name);
@@ -314,11 +341,20 @@ fn duplicate_request(state: State<AppState>, request_id: String) -> Result<Strin
 }
 
 #[tauri::command]
-fn to_curl(state: State<AppState>, request_id: String, env_name: Option<String>) -> Result<String, String> {
+fn to_curl(
+    state: State<AppState>,
+    request_id: String,
+    env_name: Option<String>,
+) -> Result<String, String> {
     let (req, env) = {
         let coll = state.collection.lock().unwrap();
-        let c = coll.as_ref().ok_or_else(|| "collection not loaded".to_string())?;
-        let req = c.requests.iter().find(|r| r.id == request_id)
+        let c = coll
+            .as_ref()
+            .ok_or_else(|| "collection not loaded".to_string())?;
+        let req = c
+            .requests
+            .iter()
+            .find(|r| r.id == request_id)
             .cloned()
             .ok_or_else(|| format!("not found: {}", request_id))?;
         let env = env_name.and_then(|n| c.envs.iter().find(|e| e.name == n).cloned());
@@ -327,8 +363,13 @@ fn to_curl(state: State<AppState>, request_id: String, env_name: Option<String>)
     let vault_data = if state.vault.password.lock().unwrap().is_some() {
         ensure_cache(&state)?;
         state.vault.cache.lock().unwrap().clone()
-    } else { None };
-    let vars = env.as_ref().map(|e| http::resolve_env_vars(e, vault_data.as_ref())).unwrap_or_default();
+    } else {
+        None
+    };
+    let vars = env
+        .as_ref()
+        .map(|e| http::resolve_env_vars(e, vault_data.as_ref()))
+        .unwrap_or_default();
     Ok(build_curl(&req, &vars))
 }
 
@@ -340,20 +381,37 @@ fn shell_escape(s: &str) -> String {
 fn build_curl(req: &Request, vars: &std::collections::HashMap<String, String>) -> String {
     let (url, _) = http::substitute(&req.http.url, vars);
     let mut lines: Vec<String> = Vec::new();
-    lines.push(format!("curl -X {} {}", req.http.method.to_uppercase(), shell_escape(&url)));
+    lines.push(format!(
+        "curl -X {} {}",
+        req.http.method.to_uppercase(),
+        shell_escape(&url)
+    ));
     for h in &req.http.headers {
-        if h.enabled == Some(false) { continue; }
+        if h.enabled == Some(false) {
+            continue;
+        }
         let (v, _) = http::substitute(&h.value, vars);
-        lines.push(format!("  -H {}", shell_escape(&format!("{}: {}", h.name, v))));
+        lines.push(format!(
+            "  -H {}",
+            shell_escape(&format!("{}: {}", h.name, v))
+        ));
     }
     if let Some(body_type) = req.http.body.r#type.as_deref() {
-        let raw = req.http.body.data.as_deref()
+        let raw = req
+            .http
+            .body
+            .data
+            .as_deref()
             .or(req.http.body.json.as_deref())
             .or(req.http.body.text.as_deref())
             .unwrap_or("");
         if !raw.is_empty() {
             let (b, _) = http::substitute(raw, vars);
-            let flag = if body_type == "json" { "--data" } else { "--data" };
+            let flag = if body_type == "json" {
+                "--data"
+            } else {
+                "--data"
+            };
             lines.push(format!("  {} {}", flag, shell_escape(&b)));
         }
     }
@@ -374,7 +432,13 @@ fn import_openapi(
     env_name: String,
 ) -> Result<openapi::ImportStats, String> {
     let root = state.root.lock().unwrap().clone();
-    openapi::import(&root, std::path::Path::new(&spec_path), &folder_prefix, create_env, &env_name)
+    openapi::import(
+        &root,
+        std::path::Path::new(&spec_path),
+        &folder_prefix,
+        create_env,
+        &env_name,
+    )
 }
 
 #[tauri::command]
@@ -406,7 +470,9 @@ async fn fire_request(
 ) -> Result<http::FiredResponse, String> {
     let (req, env) = {
         let coll = state.collection.lock().unwrap();
-        let c = coll.as_ref().ok_or_else(|| "collection not loaded".to_string())?;
+        let c = coll
+            .as_ref()
+            .ok_or_else(|| "collection not loaded".to_string())?;
         let req = c
             .requests
             .iter()

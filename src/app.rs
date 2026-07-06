@@ -42,8 +42,8 @@
 use crate::api;
 use crate::types::*;
 use dioxus::prelude::*;
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::prelude::*;
 
 /// Split a URL string on the first `?`. Everything before is kept in the URL
 /// input; everything after becomes params rows. Handles `{{baseUrl}}/path?a=b`
@@ -59,7 +59,9 @@ fn split_url_and_params(url: &str) -> (String, Vec<KV>) {
     let query = &url[q_pos + 1..];
     let mut out = Vec::new();
     for pair in query.split('&') {
-        if pair.is_empty() { continue; }
+        if pair.is_empty() {
+            continue;
+        }
         let (name, value) = match pair.find('=') {
             Some(eq) => (pair[..eq].to_string(), pair[eq + 1..].to_string()),
             None => (pair.to_string(), String::new()),
@@ -82,13 +84,20 @@ fn toggle_line_comment(text: &str, start: usize, end: usize) -> (String, usize, 
     let bytes = text.as_bytes();
     // find line-start for `start`
     let mut ls = start.min(bytes.len());
-    while ls > 0 && bytes[ls - 1] != b'\n' { ls -= 1; }
+    while ls > 0 && bytes[ls - 1] != b'\n' {
+        ls -= 1;
+    }
     // find line-end for `end`
     let mut le = end.min(bytes.len());
-    while le < bytes.len() && bytes[le] != b'\n' { le += 1; }
+    while le < bytes.len() && bytes[le] != b'\n' {
+        le += 1;
+    }
 
     let block = &text[ls..le];
-    let all_commented = !block.is_empty() && block.lines().all(|l| l.is_empty() || l.trim_start().starts_with("//"));
+    let all_commented = !block.is_empty()
+        && block
+            .lines()
+            .all(|l| l.is_empty() || l.trim_start().starts_with("//"));
 
     let mut new_lines: Vec<String> = Vec::new();
     let mut delta_start: isize = 0;
@@ -103,7 +112,9 @@ fn toggle_line_comment(text: &str, start: usize, end: usize) -> (String, usize, 
                 let rest = rest.strip_prefix(' ').unwrap_or(rest);
                 let new_line = format!("{}{}", head, rest);
                 let removed = (line.len() as isize) - (new_line.len() as isize);
-                if first { delta_start -= removed; }
+                if first {
+                    delta_start -= removed;
+                }
                 delta_end -= removed;
                 new_lines.push(new_line);
             } else {
@@ -112,7 +123,9 @@ fn toggle_line_comment(text: &str, start: usize, end: usize) -> (String, usize, 
         } else if !line.is_empty() {
             let new_line = format!("// {}", line);
             let added = (new_line.len() as isize) - (line.len() as isize);
-            if first { delta_start += added; }
+            if first {
+                delta_start += added;
+            }
             delta_end += added;
             new_lines.push(new_line);
         } else {
@@ -149,10 +162,17 @@ fn install_shortcuts(fire: Callback<()>) {
     let Some(doc) = win.document() else { return };
     let cb = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
         let mod_key = e.meta_key() || e.ctrl_key();
-        if !mod_key { return; }
+        if !mod_key {
+            return;
+        }
         match e.key().as_str() {
-            "Enter" => { e.prevent_default(); fire.call(()); }
-            "s" | "S" => { e.prevent_default(); /* autosave already ran */ }
+            "Enter" => {
+                e.prevent_default();
+                fire.call(());
+            }
+            "s" | "S" => {
+                e.prevent_default(); /* autosave already ran */
+            }
             _ => {}
         }
     });
@@ -248,7 +268,10 @@ pub fn App() -> Element {
     let load_all = use_callback(move |()| {
         spawn(async move {
             match api::vault_status().await {
-                Ok(s) => { vault_locked.set(!s.unlocked); vault_exists.set(s.exists); }
+                Ok(s) => {
+                    vault_locked.set(!s.unlocked);
+                    vault_exists.set(s.exists);
+                }
                 Err(e) => error.set(Some(format!("vault_status: {}", e))),
             }
             match api::get_root().await {
@@ -321,12 +344,22 @@ pub fn App() -> Element {
 
     let selected_req_obj = use_memo(move || {
         let id = selected_req.read().clone()?;
-        collection.read().requests.iter().find(|r| r.id == id).cloned()
+        collection
+            .read()
+            .requests
+            .iter()
+            .find(|r| r.id == id)
+            .cloned()
     });
 
     let selected_env_obj = use_memo(move || {
         let name = selected_env.read().clone()?;
-        collection.read().envs.iter().find(|e| e.name == name).cloned()
+        collection
+            .read()
+            .envs
+            .iter()
+            .find(|e| e.name == name)
+            .cloned()
     });
 
     rsx! {
@@ -612,8 +645,14 @@ fn UnlockModal(exists: bool, on_unlocked: EventHandler<()>) -> Element {
     let mut submit = move || {
         let pw = password.read().clone();
         let cf = confirm.read().clone();
-        if pw.is_empty() { err.set(Some("password required".into())); return; }
-        if !exists && pw != cf { err.set(Some("passwords don't match".into())); return; }
+        if pw.is_empty() {
+            err.set(Some("password required".into()));
+            return;
+        }
+        if !exists && pw != cf {
+            err.set(Some("passwords don't match".into()));
+            return;
+        }
         spawn(async move {
             match api::vault_unlock(&pw).await {
                 Ok(_) => on_unlocked.call(()),
@@ -992,11 +1031,20 @@ fn ImportCurlModal(default_folder: String, on_close: EventHandler<()>) -> Elemen
 
     let do_parse = move |_| {
         let raw = input.read().clone();
-        if raw.trim().is_empty() { err.set(Some("paste a curl command".into())); return; }
+        if raw.trim().is_empty() {
+            err.set(Some("paste a curl command".into()));
+            return;
+        }
         spawn(async move {
             match api::parse_curl(&raw).await {
-                Ok(req) => { preview.set(Some(req)); err.set(None); }
-                Err(e) => { preview.set(None); err.set(Some(e)); }
+                Ok(req) => {
+                    preview.set(Some(req));
+                    err.set(None);
+                }
+                Err(e) => {
+                    preview.set(None);
+                    err.set(Some(e));
+                }
             }
         });
     };
@@ -1005,8 +1053,14 @@ fn ImportCurlModal(default_folder: String, on_close: EventHandler<()>) -> Elemen
         let raw = input.read().clone();
         let n = name.read().clone();
         let f = folder.read().clone();
-        if n.trim().is_empty() { err.set(Some("name required".into())); return; }
-        if f.trim().is_empty() { err.set(Some("folder required".into())); return; }
+        if n.trim().is_empty() {
+            err.set(Some("name required".into()));
+            return;
+        }
+        if f.trim().is_empty() {
+            err.set(Some("folder required".into()));
+            return;
+        }
         spawn(async move {
             match api::import_curl(&raw, &f, &n).await {
                 Ok(_) => on_close.call(()),
@@ -1069,7 +1123,10 @@ fn ImportOpenApiModal(on_close: EventHandler<()>) -> Element {
 
     let do_preview = move |_| {
         let p = spec_path.read().clone();
-        if p.trim().is_empty() { err.set(Some("spec path required".into())); return; }
+        if p.trim().is_empty() {
+            err.set(Some("spec path required".into()));
+            return;
+        }
         busy.set(true);
         spawn(async move {
             match api::preview_openapi(&p).await {
@@ -1080,7 +1137,10 @@ fn ImportOpenApiModal(on_close: EventHandler<()>) -> Element {
                     preview.set(Some(pv));
                     err.set(None);
                 }
-                Err(e) => { preview.set(None); err.set(Some(e)); }
+                Err(e) => {
+                    preview.set(None);
+                    err.set(Some(e));
+                }
             }
             busy.set(false);
         });
@@ -1091,7 +1151,10 @@ fn ImportOpenApiModal(on_close: EventHandler<()>) -> Element {
         let fp = folder_prefix.read().clone();
         let ce = *create_env.read();
         let en = env_name.read().clone();
-        if preview.peek().is_none() { err.set(Some("preview first".into())); return; }
+        if preview.peek().is_none() {
+            err.set(Some("preview first".into()));
+            return;
+        }
         busy.set(true);
         spawn(async move {
             match api::import_openapi(&p, &fp, ce, &en).await {
@@ -1188,7 +1251,13 @@ fn ImportOpenApiModal(on_close: EventHandler<()>) -> Element {
 
 fn slug_env(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
         .collect::<String>()
         .trim_matches('_')
         .to_string()
@@ -1217,7 +1286,9 @@ fn RequestEditor(
         // Merge params from URL query into existing params tab. URL-derived
         // rows come first (enabled) so they show up front.
         let mut merged = init_extra_params;
-        for p in &req.http.params { merged.push(p.clone()); }
+        for p in &req.http.params {
+            merged.push(p.clone());
+        }
         merged
     });
     let mut body_type = use_signal(|| req.http.body.kind.clone().unwrap_or_default());
@@ -1230,7 +1301,8 @@ fn RequestEditor(
             "text" => [&b.text, &b.data, &b.json],
             _ => [&b.data, &b.json, &b.text],
         };
-        candidates.iter()
+        candidates
+            .iter()
             .find_map(|f| f.as_ref().filter(|s| !s.is_empty()).cloned())
             .unwrap_or_default()
     });
@@ -1244,7 +1316,10 @@ fn RequestEditor(
     let mut saving = use_signal(|| false);
 
     let orig = req.clone();
-    let mut bump = move || { let n = *save_gen.peek() + 1; save_gen.set(n); };
+    let mut bump = move || {
+        let n = *save_gen.peek() + 1;
+        save_gen.set(n);
+    };
 
     // Autosave: react to save_gen. Wait 500ms. If save_gen changed during the
     // wait, another edit came in — do nothing (that later task will save).
@@ -1252,11 +1327,15 @@ fn RequestEditor(
     let orig_for_effect = orig.clone();
     use_effect(move || {
         let stamp = *save_gen.read();
-        if stamp == 0 { return; }
+        if stamp == 0 {
+            return;
+        }
         let orig = orig_for_effect.clone();
         spawn(async move {
             gloo_timers::future::TimeoutFuture::new(500).await;
-            if *save_gen.peek() != stamp { return; }
+            if *save_gen.peek() != stamp {
+                return;
+            }
             let mut updated = orig;
             updated.http.method = method.peek().clone();
             updated.http.url = url.peek().clone();
@@ -1265,14 +1344,25 @@ fn RequestEditor(
             let bt = body_type.peek().clone();
             let bx = body_text.peek().clone();
             updated.http.body = Body {
-                kind: if bt.is_empty() { None } else { Some(bt.clone()) },
+                kind: if bt.is_empty() {
+                    None
+                } else {
+                    Some(bt.clone())
+                },
                 json: None,
                 text: None,
-                data: if !bt.is_empty() && !bx.is_empty() { Some(bx.clone()) } else { None },
+                data: if !bt.is_empty() && !bx.is_empty() {
+                    Some(bx.clone())
+                } else {
+                    None
+                },
             };
             saving.set(true);
             match api::save_request(&updated).await {
-                Ok(_) => { save_err.set(None); on_saved.call(()); }
+                Ok(_) => {
+                    save_err.set(None);
+                    on_saved.call(());
+                }
                 Err(e) => save_err.set(Some(e)),
             }
             saving.set(false);

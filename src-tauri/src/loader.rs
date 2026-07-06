@@ -48,7 +48,10 @@ pub fn load_collection(root: &Path) -> Result<Collection, String> {
 
     let env_dir = root.join("environments");
     if env_dir.is_dir() {
-        for entry in std::fs::read_dir(&env_dir).map_err(|e| e.to_string())?.flatten() {
+        for entry in std::fs::read_dir(&env_dir)
+            .map_err(|e| e.to_string())?
+            .flatten()
+        {
             let p = entry.path();
             if p.extension().map_or(true, |x| x != "yml") {
                 continue;
@@ -62,7 +65,11 @@ pub fn load_collection(root: &Path) -> Result<Collection, String> {
                 Err(_) => continue,
             };
             if env.name.is_empty() {
-                env.name = p.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+                env.name = p
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string();
             }
             env.path = p.to_string_lossy().to_string();
             c.envs.push(env);
@@ -143,7 +150,13 @@ pub fn write_request(req: &Request) -> Result<(), String> {
 
 /// Create a new request yml at `<root>/<folder>/<name>.yml`. Errors if the
 /// file already exists — we never overwrite silently.
-pub fn create_request_file(root: &Path, folder: &str, name: &str, method: &str, url: &str) -> Result<PathBuf, String> {
+pub fn create_request_file(
+    root: &Path,
+    folder: &str,
+    name: &str,
+    method: &str,
+    url: &str,
+) -> Result<PathBuf, String> {
     let dir = root.join(folder);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let file = dir.join(format!("{}.yml", name));
