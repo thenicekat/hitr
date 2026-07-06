@@ -367,7 +367,7 @@ pub fn App() -> Element {
         div { class: "app",
             // header
             div { class: "topbar",
-                span { class: "brand", "aptui" }
+                span { class: "brand", "hitr" }
                 if *editing_root.read() {
                     input {
                         class: "root-input",
@@ -1293,7 +1293,7 @@ fn RequestEditor(
     });
     let mut body_type = use_signal(|| req.http.body.kind.clone().unwrap_or_default());
     let mut body_text = use_signal(|| {
-        // Bruno stores body under `data`; older aptui saves used `json`/`text`.
+        // Bruno stores body under `data`; older hitr saves used `json`/`text`.
         // Prefer whichever is non-empty.
         let b = &req.http.body;
         let candidates = match body_type.peek().as_str() {

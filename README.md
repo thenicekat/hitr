@@ -1,4 +1,4 @@
-# aptui
+# hitr
 
 Fast, native REST client for [Bruno](https://www.usebruno.com/)-format collections. Rust + Tauri + Dioxus. No Electron, no Node runtime.
 
@@ -29,13 +29,13 @@ cargo install dioxus-cli --locked
 cargo install tauri-cli --version '^2.0.0' --locked
 
 # build & run
-git clone https://github.com/<you>/aptui
-cd aptui
+git clone https://github.com/<you>/hitr
+cd hitr
 cargo tauri dev              # dev mode with hot reload
 cargo tauri build            # release .app bundle in src-tauri/target/release/bundle/macos
 ```
 
-Point aptui at your collection root via the topbar path (or edit `~/Library/Application Support/aptui/config.json`).
+Point hitr at your collection root via the topbar path (or edit `~/Library/Application Support/hitr/config.json`).
 
 ## Layout
 
@@ -58,8 +58,8 @@ Point aptui at your collection root via the topbar path (or edit `~/Library/Appl
 |---------------------|-------------------------------------------------------------------|
 | Requests            | Bruno YAML at `<root>/<folder>/<name>.yml`                        |
 | Envs                | Bruno YAML at `<root>/environments/<name>.yml` (variable *names* + non-secret values) |
-| Secret values       | age-encrypted vault at `<config>/aptui/vault.age`                 |
-| Config              | `<config>/aptui/config.json` (just the collection root path)      |
+| Secret values       | age-encrypted vault at `<config>/hitr/vault.age`                 |
+| Config              | `<config>/hitr/config.json` (just the collection root path)      |
 
 `<config>` = `~/Library/Application Support` on macOS, `~/.config` on Linux, `%APPDATA%` on Windows.
 
@@ -79,7 +79,7 @@ Each yml lists variable names and their non-secret values. Secret variables have
 **Vault** — one encrypted file:
 
 ```
-~/Library/Application Support/aptui/vault.age
+~/Library/Application Support/hitr/vault.age
 ```
 
 Passphrase-derived key, [age](https://age-encryption.org/) format (ChaCha20-Poly1305). Written atomically via tmp+rename. Holds all secret values across all envs. If the vault file is deleted, non-secret values are untouched but every secret needs re-entering.
@@ -96,7 +96,7 @@ Passphrase-derived key, [age](https://age-encryption.org/) format (ChaCha20-Poly
 
 `{{name}}` in URL, headers, params, or body resolves from the currently-selected env. Secret vars pull from the vault at fire-time. Unresolved vars stay as `{{name}}` in the output — the fire fails loudly and tells you which vars are missing.
 
-**Bearer helper:** if the env has a `bearerToken` var and the request has no `Authorization` header, aptui sends `Authorization: Bearer <val>` automatically.
+**Bearer helper:** if the env has a `bearerToken` var and the request has no `Authorization` header, hitr sends `Authorization: Bearer <val>` automatically.
 
 ## Curl import
 

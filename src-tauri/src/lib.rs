@@ -59,7 +59,7 @@ fn default_root() -> PathBuf {
 
 fn config_path() -> Option<PathBuf> {
     let bd = BaseDirs::new()?;
-    Some(bd.config_dir().join("aptui").join("config.json"))
+    Some(bd.config_dir().join("hitr").join("config.json"))
 }
 
 fn read_root_from_config() -> Option<PathBuf> {

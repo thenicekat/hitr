@@ -2,8 +2,8 @@
 
 Two Rust crates in one workspace:
 
-- `aptui-ui` (root `Cargo.toml`) — Dioxus frontend, compiles to WASM, runs in the WebView.
-- `aptui` (`src-tauri/`) — Tauri v2 backend, native Rust, runs on the host.
+- `hitr-ui` (root `Cargo.toml`) — Dioxus frontend, compiles to WASM, runs in the WebView.
+- `hitr` (`src-tauri/`) — Tauri v2 backend, native Rust, runs on the host.
 
 They communicate via Tauri's IPC bridge — the frontend calls Rust functions marked `#[tauri::command]` through `invoke("cmd_name", args)`.
 
@@ -26,7 +26,7 @@ They communicate via Tauri's IPC bridge — the frontend calls Rust functions ma
 ## File layout
 
 ```
-aptui/
+hitr/
 ├── Cargo.toml                # frontend crate + workspace root
 ├── Dioxus.toml               # dioxus-cli config (dev port, watch paths)
 ├── src/                      # frontend (WASM)
@@ -41,7 +41,7 @@ aptui/
 │   ├── tauri.conf.json       # window size, bundle id, CSP
 │   ├── build.rs              # tauri-build codegen entrypoint
 │   └── src/
-│       ├── main.rs           # `aptui_lib::run()` shim
+│       ├── main.rs           # `hitr_lib::run()` shim
 │       ├── lib.rs            # command handlers + AppState + Tauri Builder
 │       ├── model.rs          # canonical structs (Env, Request, HttpSpec…)
 │       ├── loader.rs         # walk collection dir, parse Bruno YAML, write back
@@ -56,7 +56,7 @@ aptui/
 ## Startup sequence
 
 1. Tauri host launches → `run()` in `lib.rs`:
-   - reads `~/Library/Application Support/aptui/config.json` for last-known collection root (falls back to `~/collections/default`)
+   - reads `~/Library/Application Support/hitr/config.json` for last-known collection root (falls back to `~/collections/default`)
    - constructs `AppState { root, collection: None, vault: locked }`
    - starts webview → serves `dist/` (built by `dx serve` in dev, `dx bundle` in release)
 2. WebView loads WASM bundle → Dioxus mounts `App`.
@@ -96,8 +96,8 @@ App::response signal set → view re-renders
 |---|---|---|---|
 | Requests | Bruno YAML | `<root>/<folder>/<name>.yml` | We write these back via `loader::write_request` when the user saves edits. Runtime fields (`path`, `rel_path`, `id`) stripped before write. |
 | Envs | Bruno YAML | `<root>/environments/<name>.yml` | Contains variable *names* only. Non-secret values inline. Secret values are absent — they're in the vault. |
-| Secrets | age-encrypted JSON | `~/Library/Application Support/aptui/vault.age` | Passphrase-derived key, ChaCha20-Poly1305. Written atomically via tmp+rename. |
-| Config | JSON | `~/Library/Application Support/aptui/config.json` | Just the collection root path. |
+| Secrets | age-encrypted JSON | `~/Library/Application Support/hitr/vault.age` | Passphrase-derived key, ChaCha20-Poly1305. Written atomically via tmp+rename. |
+| Config | JSON | `~/Library/Application Support/hitr/config.json` | Just the collection root path. |
 
 ## Reactivity model
 

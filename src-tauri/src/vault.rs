@@ -1,6 +1,6 @@
 //! Age-encrypted secrets vault.
 //!
-//! One file per user, at `<config-dir>/aptui/vault.age`, holding all secret
+//! One file per user, at `<config-dir>/hitr/vault.age`, holding all secret
 //! variable values across all environments. Encrypted with a passphrase-
 //! derived key using the [age](https://age-encryption.org/) format
 //! (ChaCha20-Poly1305).
@@ -54,7 +54,7 @@ impl Default for VaultState {
 
 fn vault_path() -> Result<PathBuf, String> {
     let bd = BaseDirs::new().ok_or_else(|| "no base dirs".to_string())?;
-    let dir = bd.config_dir().join("aptui");
+    let dir = bd.config_dir().join("hitr");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir.join("vault.age"))
 }
