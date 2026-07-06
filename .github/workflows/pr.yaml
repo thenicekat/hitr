@@ -1,0 +1,45 @@
+name: Build and check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+          targets: wasm32-unknown-unknown
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-check-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Check backend (native)
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Check frontend (wasm)
+        run: cargo check --target wasm32-unknown-unknown
+
+      - name: Clippy backend
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+        continue-on-error: true
+
+      - name: Clippy frontend
+        run: cargo clippy --target wasm32-unknown-unknown -- -D warnings
+        continue-on-error: true
