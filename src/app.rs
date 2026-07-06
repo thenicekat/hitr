@@ -45,6 +45,93 @@ use dioxus::prelude::*;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
+/// Split a URL string on the first `?`. Everything before is kept in the URL
+/// input; everything after becomes params rows. Handles `{{baseUrl}}/path?a=b`
+/// safely — templates in the pre-`?` part pass through unchanged.
+///
+/// Params list preserves order and doesn't URL-decode values (Bruno stores
+/// raw). Rows are enabled=true by default.
+fn split_url_and_params(url: &str) -> (String, Vec<KV>) {
+    let Some(q_pos) = url.find('?') else {
+        return (url.to_string(), Vec::new());
+    };
+    let base = url[..q_pos].to_string();
+    let query = &url[q_pos + 1..];
+    let mut out = Vec::new();
+    for pair in query.split('&') {
+        if pair.is_empty() { continue; }
+        let (name, value) = match pair.find('=') {
+            Some(eq) => (pair[..eq].to_string(), pair[eq + 1..].to_string()),
+            None => (pair.to_string(), String::new()),
+        };
+        out.push(KV {
+            name,
+            value,
+            kind: Some("query".into()),
+            description: None,
+            enabled: Some(true),
+        });
+    }
+    (base, out)
+}
+
+/// Toggle `// ` comment on the line(s) covered by [start,end] in `text`.
+/// Returns (new_text, new_caret_start, new_caret_end). If every line in the
+/// range is already commented, uncomment; otherwise, comment all.
+fn toggle_line_comment(text: &str, start: usize, end: usize) -> (String, usize, usize) {
+    let bytes = text.as_bytes();
+    // find line-start for `start`
+    let mut ls = start.min(bytes.len());
+    while ls > 0 && bytes[ls - 1] != b'\n' { ls -= 1; }
+    // find line-end for `end`
+    let mut le = end.min(bytes.len());
+    while le < bytes.len() && bytes[le] != b'\n' { le += 1; }
+
+    let block = &text[ls..le];
+    let all_commented = !block.is_empty() && block.lines().all(|l| l.is_empty() || l.trim_start().starts_with("//"));
+
+    let mut new_lines: Vec<String> = Vec::new();
+    let mut delta_start: isize = 0;
+    let mut delta_end: isize = 0;
+    let mut first = true;
+    for line in block.split('\n') {
+        if all_commented {
+            // remove leading whitespace + `//` + optional single space
+            if let Some(idx) = line.find("//") {
+                let head = &line[..idx];
+                let rest = &line[idx + 2..];
+                let rest = rest.strip_prefix(' ').unwrap_or(rest);
+                let new_line = format!("{}{}", head, rest);
+                let removed = (line.len() as isize) - (new_line.len() as isize);
+                if first { delta_start -= removed; }
+                delta_end -= removed;
+                new_lines.push(new_line);
+            } else {
+                new_lines.push(line.to_string());
+            }
+        } else if !line.is_empty() {
+            let new_line = format!("// {}", line);
+            let added = (new_line.len() as isize) - (line.len() as isize);
+            if first { delta_start += added; }
+            delta_end += added;
+            new_lines.push(new_line);
+        } else {
+            new_lines.push(line.to_string());
+        }
+        first = false;
+    }
+
+    let new_block = new_lines.join("\n");
+    let mut out = String::with_capacity(text.len() + 32);
+    out.push_str(&text[..ls]);
+    out.push_str(&new_block);
+    out.push_str(&text[le..]);
+
+    let new_start = (start as isize + delta_start).max(0) as usize;
+    let new_end = (end as isize + delta_end).max(0) as usize;
+    (out, new_start, new_end)
+}
+
 /// Best-effort clipboard write. Silently drops errors — clipboard access can
 /// fail if the WebView doesn't have focus, and there's nothing useful to say.
 fn copy_to_clipboard(text: &str) {
@@ -1123,9 +1210,16 @@ fn RequestEditor(
     on_saved: EventHandler<()>,
 ) -> Element {
     let mut method = use_signal(|| req.http.method.clone());
-    let mut url = use_signal(|| req.http.url.clone());
+    let (init_url, init_extra_params) = split_url_and_params(&req.http.url);
+    let mut url = use_signal(|| init_url);
     let mut headers = use_signal(|| req.http.headers.clone());
-    let mut params = use_signal(|| req.http.params.clone());
+    let mut params = use_signal(|| {
+        // Merge params from URL query into existing params tab. URL-derived
+        // rows come first (enabled) so they show up front.
+        let mut merged = init_extra_params;
+        for p in &req.http.params { merged.push(p.clone()); }
+        merged
+    });
     let mut body_type = use_signal(|| req.http.body.kind.clone().unwrap_or_default());
     let mut body_text = use_signal(|| {
         // Bruno stores body under `data`; older aptui saves used `json`/`text`.
@@ -1198,7 +1292,22 @@ fn RequestEditor(
                 input {
                     class: "url-input",
                     value: "{url}",
-                    oninput: move |e| { url.set(e.value()); bump(); },
+                    oninput: move |e| {
+                        let v = e.value();
+                        // Auto-split query pairs into params tab as user types
+                        // — but only when the input actually contains `?`, so
+                        // templates like `{{baseUrl}}/path` don't get chopped.
+                        if v.contains('?') {
+                            let (base, extras) = split_url_and_params(&v);
+                            let mut cur = params.read().clone();
+                            for e in extras { cur.push(e); }
+                            params.set(cur);
+                            url.set(base);
+                        } else {
+                            url.set(v);
+                        }
+                        bump();
+                    },
                     placeholder: "{{baseUrl}}/path"
                 }
                 if *saving.read() {
@@ -1323,7 +1432,29 @@ fn RequestEditor(
                                     spellcheck: false,
                                     value: "{body_text}",
                                     oninput: move |e| { body_text.set(e.value()); bump(); },
-                                    placeholder: "request body…"
+                                    onkeydown: move |e| {
+                                        if (e.modifiers().meta() || e.modifiers().ctrl()) && e.key() == Key::Character("/".into()) {
+                                            e.prevent_default();
+                                            if let Some(win) = web_sys::window() {
+                                                if let Some(doc) = win.document() {
+                                                    if let Some(active) = doc.active_element() {
+                                                        if let Ok(ta) = active.dyn_into::<web_sys::HtmlTextAreaElement>() {
+                                                            let val = ta.value();
+                                                            let s = ta.selection_start().ok().flatten().unwrap_or(0) as usize;
+                                                            let en = ta.selection_end().ok().flatten().unwrap_or(0) as usize;
+                                                            let (new_val, ns, ne) = toggle_line_comment(&val, s, en);
+                                                            ta.set_value(&new_val);
+                                                            let _ = ta.set_selection_start(Some(ns as u32));
+                                                            let _ = ta.set_selection_end(Some(ne as u32));
+                                                            body_text.set(new_val);
+                                                            bump();
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
+                                    placeholder: "request body… (⌘/ to comment)"
                                 }
                             } else {
                                 div { class: "muted center", "no body" }
