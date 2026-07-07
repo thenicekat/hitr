@@ -407,12 +407,8 @@ fn build_curl(req: &Request, vars: &std::collections::HashMap<String, String>) -
             .unwrap_or("");
         if !raw.is_empty() {
             let (b, _) = http::substitute(raw, vars);
-            let flag = if body_type == "json" {
-                "--data"
-            } else {
-                "--data"
-            };
-            lines.push(format!("  {} {}", flag, shell_escape(&b)));
+            let _ = body_type;
+            lines.push(format!("  --data {}", shell_escape(&b)));
         }
     }
     lines.join(" \\\n")

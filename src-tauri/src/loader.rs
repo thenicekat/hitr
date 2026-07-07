@@ -53,7 +53,7 @@ pub fn load_collection(root: &Path) -> Result<Collection, String> {
             .flatten()
         {
             let p = entry.path();
-            if p.extension().map_or(true, |x| x != "yml") {
+            if p.extension().is_none_or(|x| x != "yml") {
                 continue;
             }
             let raw = match std::fs::read_to_string(&p) {
@@ -89,7 +89,7 @@ pub fn load_collection(root: &Path) -> Result<Collection, String> {
             continue;
         }
         let p = entry.path();
-        if p.extension().map_or(true, |x| x != "yml") {
+        if p.extension().is_none_or(|x| x != "yml") {
             continue;
         }
         let base = p.file_name().and_then(|s| s.to_str()).unwrap_or("");

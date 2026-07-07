@@ -38,8 +38,6 @@ jobs:
 
       - name: Clippy backend
         run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
-        continue-on-error: true
 
       - name: Clippy frontend
         run: cargo clippy --target wasm32-unknown-unknown -- -D warnings
-        continue-on-error: true

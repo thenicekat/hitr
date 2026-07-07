@@ -118,17 +118,15 @@ fn extract_body(op: &Operation, spec: &OpenAPI) -> Body {
         }
     }
     // else first example in `examples` map
-    if let Some((_, ex)) = content.examples.iter().next() {
-        if let ReferenceOr::Item(ex) = ex {
-            if let Some(v) = &ex.value {
-                if let Ok(pretty) = serde_json::to_string_pretty(v) {
-                    return Body {
-                        r#type: Some("json".into()),
-                        data: Some(pretty),
-                        json: None,
-                        text: None,
-                    };
-                }
+    if let Some((_, ReferenceOr::Item(ex))) = content.examples.iter().next() {
+        if let Some(v) = &ex.value {
+            if let Ok(pretty) = serde_json::to_string_pretty(v) {
+                return Body {
+                    r#type: Some("json".into()),
+                    data: Some(pretty),
+                    json: None,
+                    text: None,
+                };
             }
         }
     }

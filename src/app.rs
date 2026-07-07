@@ -195,12 +195,12 @@ fn install_input_attrs() {
             for tag in ["input", "textarea"] {
                 if let Ok(list) = el.query_selector_all(tag) {
                     for i in 0..list.length() {
-                        if let Some(node) = list.item(i) {
-                            if let Ok(e) = node.dyn_into::<web_sys::Element>() {
-                                let _ = e.set_attribute("autocapitalize", "off");
-                                let _ = e.set_attribute("autocorrect", "off");
-                                let _ = e.set_attribute("spellcheck", "false");
-                            }
+                        if let Some(node) = list.item(i)
+                            && let Ok(e) = node.dyn_into::<web_sys::Element>()
+                        {
+                            let _ = e.set_attribute("autocapitalize", "off");
+                            let _ = e.set_attribute("autocorrect", "off");
+                            let _ = e.set_attribute("spellcheck", "false");
                         }
                     }
                 }
@@ -229,8 +229,9 @@ fn install_input_attrs() {
     });
 
     if let Ok(observer) = web_sys::MutationObserver::new(cb.as_ref().unchecked_ref()) {
-        let mut init = web_sys::MutationObserverInit::new();
-        init.child_list(true).subtree(true);
+        let init = web_sys::MutationObserverInit::new();
+        init.set_child_list(true);
+        init.set_subtree(true);
         if let Some(body) = doc.body() {
             let _ = observer.observe_with_options(body.as_ref(), &init);
         }
@@ -251,7 +252,7 @@ enum Modal {
 }
 
 pub fn App() -> Element {
-    let mut collection = use_signal(|| Collection::default());
+    let mut collection = use_signal(Collection::default);
     let mut selected_env = use_signal(|| None::<String>);
     let mut selected_req = use_signal(|| None::<String>);
     let mut filter = use_signal(String::new);
@@ -280,10 +281,10 @@ pub fn App() -> Element {
             }
             match api::load().await {
                 Ok(c) => {
-                    if selected_env.peek().is_none() {
-                        if let Some(first) = c.envs.first() {
-                            selected_env.set(Some(first.name.clone()));
-                        }
+                    if selected_env.peek().is_none()
+                        && let Some(first) = c.envs.first()
+                    {
+                        selected_env.set(Some(first.name.clone()));
                     }
                     collection.set(c);
                     error.set(None);
@@ -312,7 +313,7 @@ pub fn App() -> Element {
     let total_reqs = use_memo(move || collection.read().requests.len());
     let shown_reqs = use_memo(move || filtered_reqs.read().len());
 
-    let mut history = use_signal(|| std::collections::HashMap::<String, Vec<FiredResponse>>::new());
+    let mut history = use_signal(std::collections::HashMap::<String, Vec<FiredResponse>>::new);
     let fire = use_callback(move |()| {
         let req_id = selected_req.read().clone();
         let env_name = selected_env.read().clone();
@@ -789,7 +790,7 @@ fn NewEnvModal(on_close: EventHandler<()>, envs: Vec<Env>) -> Element {
 #[component]
 fn EditEnvModal(env: Env, on_close: EventHandler<()>) -> Element {
     let mut vars = use_signal(|| env.variables.clone());
-    let mut secret_values = use_signal(|| std::collections::HashMap::<String, String>::new());
+    let mut secret_values = use_signal(std::collections::HashMap::<String, String>::new);
     let mut err = use_signal(|| None::<String>);
     let mut new_name = use_signal(|| env.name.clone());
     let env_name = env.name.clone();
@@ -1281,7 +1282,7 @@ fn RequestEditor(
     let mut method = use_signal(|| req.http.method.clone());
     let (init_url, init_extra_params) = split_url_and_params(&req.http.url);
     let mut url = use_signal(|| init_url);
-    let mut headers = use_signal(|| req.http.headers.clone());
+    let headers = use_signal(|| req.http.headers.clone());
     let mut params = use_signal(|| {
         // Merge params from URL query into existing params tab. URL-derived
         // rows come first (enabled) so they show up front.
@@ -1441,7 +1442,7 @@ fn RequestEditor(
                             onclick: move |_| {
                                 let r = orig_del.clone();
                                 spawn(async move {
-                                    if let Ok(_) = api::delete_request(&r).await {
+                                    if api::delete_request(&r).await.is_ok() {
                                         on_saved.call(());
                                     }
                                 });
@@ -1525,10 +1526,10 @@ fn RequestEditor(
                                     onkeydown: move |e| {
                                         if (e.modifiers().meta() || e.modifiers().ctrl()) && e.key() == Key::Character("/".into()) {
                                             e.prevent_default();
-                                            if let Some(win) = web_sys::window() {
-                                                if let Some(doc) = win.document() {
-                                                    if let Some(active) = doc.active_element() {
-                                                        if let Ok(ta) = active.dyn_into::<web_sys::HtmlTextAreaElement>() {
+                                            if let Some(win) = web_sys::window()
+                                                && let Some(doc) = win.document()
+                                                    && let Some(active) = doc.active_element()
+                                                        && let Ok(ta) = active.dyn_into::<web_sys::HtmlTextAreaElement>() {
                                                             let val = ta.value();
                                                             let s = ta.selection_start().ok().flatten().unwrap_or(0) as usize;
                                                             let en = ta.selection_end().ok().flatten().unwrap_or(0) as usize;
@@ -1539,9 +1540,6 @@ fn RequestEditor(
                                                             body_text.set(new_val);
                                                             bump();
                                                         }
-                                                    }
-                                                }
-                                            }
                                         }
                                     },
                                     placeholder: "request body… (⌘/ to comment)"
