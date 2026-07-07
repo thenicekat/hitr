@@ -187,7 +187,7 @@ fn rename_env(state: State<AppState>, old_name: String, new_name: String) -> Res
     // same underlying file (case-insensitive fs) → still allow rename
     let same_file = std::fs::canonicalize(&old_path)
         .ok()
-        .and_then(|a| std::fs::canonicalize(&new_path).ok().map(|b| (a, b)))
+        .zip(std::fs::canonicalize(&new_path).ok())
         .map(|(a, b)| a == b)
         .unwrap_or(false);
     if new_path.exists() && !same_file {
