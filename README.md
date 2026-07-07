@@ -10,15 +10,35 @@ Built because Bruno's Electron shell is slow and Postman requires a cloud accoun
 
 ## Features
 
+**Collections**
 - Reads Bruno-format `.yml` collections directly — no import step
-- Edit / rename / create / delete envs
-- Create requests (from scratch, from a curl paste, or via `+ new` form)
-- Full request editor: method, URL, params, headers, body (JSON / text)
-- `{{var}}` substitution from selected env at fire time
-- Secrets encrypted with [age](https://age-encryption.org/) + master password (never touch disk unencrypted)
-- Response pane: status, latency, headers, pretty-printed JSON body
+- Import from curl paste (Chrome DevTools "Copy as cURL" works)
+- Import from OpenAPI 3.x spec (yaml or json) — one request per operation, foldered by tag
+- Create / duplicate / delete / rename requests
 - Fuzzy search over 1000+ requests
-- ~5 MB binary, ~50 ms warm start
+
+**Editing**
+- Full request editor: method, URL, params, headers, body
+- Autosave on every edit (500ms debounce, no save button)
+- URL query auto-splits into params tab (Postman-style)
+- `⌘/` toggles `//` comments on JSON body — stripped before send so wire stays valid
+- `⌘Enter` fires selected request
+
+**Envs & secrets**
+- Create / rename / delete envs; edit variables inline
+- `{{var}}` substitution from selected env at fire time
+- Fails loudly with named vars when any are unresolved
+- Secrets encrypted with [age](https://age-encryption.org/) + master password — never on disk unencrypted
+- Bearer helper: env's `bearerToken` becomes `Authorization: Bearer …` automatically
+
+**Response pane**
+- Status, latency (ms), headers, pretty-printed JSON body
+- In-memory history: last 10 fires per request
+- Copy response body or copy request as curl (with resolved vars) to clipboard
+
+**Ops**
+- ~15 MB single binary, ~50 ms warm start (vs Bruno's 3-5 s Electron boot)
+- No Node runtime, no cloud account, no plugins, no telemetry
 
 ## Install
 
@@ -92,23 +112,17 @@ Passphrase-derived key, [age](https://age-encryption.org/) format (ChaCha20-Poly
 - `vault.age` ❌ (encrypted, but keep out of shared repos anyway)
 - `config.json` ❌ (has your local absolute path)
 
-## Var substitution
+## Import notes
 
-`{{name}}` in URL, headers, params, or body resolves from the currently-selected env. Secret vars pull from the vault at fire-time. Unresolved vars stay as `{{name}}` in the output — the fire fails loudly and tells you which vars are missing.
+**curl**: handles `-X`, `-H`, `-d/--data*`, `--json`, quoted args, backslash line-continuation. Ignores `-F/--form` (multipart), cookies, auth flags.
 
-**Bearer helper:** if the env has a `bearerToken` var and the request has no `Authorization` header, hitr sends `Authorization: Bearer <val>` automatically.
-
-## Curl import
-
-Requests pane → **curl** → paste any curl command (Chrome DevTools "Copy as cURL" works). Handles `-X`, `-H`, `-d/--data*`, `--json`, quoted args, backslash line-continuation.
-
-Doesn't handle: `-F/--form` (multipart), cookies, auth flags. Add if you need.
+**OpenAPI**: reads yaml or json, walks `paths.<path>.<method>`, one request per operation. Folder = first tag. Extracts query + header params. Body from `application/json` example (no schema-driven generation). Suggested env vars from `servers[0]` + `securitySchemes`. Skips existing files — re-import is idempotent.
 
 ## Deliberate non-features
 
-Request history. Pre/post scripting. Chained requests. Team sync. GraphQL builder. Cookie jar. WebSocket. gRPC.
+Persistent request history. Pre/post scripting. Chained requests. Team sync. GraphQL builder. Cookie jar. WebSocket. gRPC. File upload / multipart.
 
-If it's in Postman and not here, it's on purpose. The value is what's *not* built.
+If it's in Postman and not here, it's on purpose.
 
 ## Contributing
 
