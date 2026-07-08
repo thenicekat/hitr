@@ -28,7 +28,9 @@ use age::secrecy::SecretString;
 use directories::BaseDirs;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use tauri::AppHandle;
 use tauri::{Manager, State};
+use tauri_plugin_dialog::DialogExt;
 
 struct AppState {
     root: Mutex<PathBuf>,
@@ -506,6 +508,21 @@ fn clear_history(state: State<AppState>, request_id: String) -> Result<(), Strin
     history::clear(&root, &request_id)
 }
 
+#[tauri::command]
+async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
+    // Plugin's blocking builder deadlocks on the main thread; use the async
+    // variant with a oneshot channel.
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog().file().pick_folder(move |path| {
+        let _ = tx.send(path);
+    });
+    match rx.await {
+        Ok(Some(p)) => Ok(Some(p.to_string())),
+        Ok(None) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let root = read_root_from_config().unwrap_or_else(default_root);
@@ -547,6 +564,7 @@ pub fn run() {
             fire_request,
             load_history,
             clear_history,
+            pick_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
