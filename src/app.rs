@@ -1501,7 +1501,7 @@ fn RequestEditor(
                                     }
                                 });
                             },
-                            "❏"
+                            "⧉"
                         }
                         button {
                             class: "btn icon wide",
