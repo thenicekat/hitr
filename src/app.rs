@@ -265,6 +265,7 @@ pub fn App() -> Element {
     let mut vault_exists = use_signal(|| true);
     let mut editing_root = use_signal(|| false);
     let mut root_input = use_signal(String::new);
+    let mut toast = use_signal(|| None::<String>);
 
     let load_all = use_callback(move |()| {
         spawn(async move {
@@ -341,6 +342,17 @@ pub fn App() -> Element {
         load_all.call(());
         install_input_attrs();
         install_shortcuts(fire);
+    });
+
+    // Auto-dismiss toast after 2s. Guards on Some so re-triggering a toast
+    // while one is showing resets the timer rather than double-clearing.
+    use_effect(move || {
+        if toast.read().is_some() {
+            spawn(async move {
+                gloo_timers::future::TimeoutFuture::new(2000).await;
+                toast.set(None);
+            });
+        }
     });
 
     let selected_req_obj = use_memo(move || {
@@ -533,6 +545,7 @@ pub fn App() -> Element {
                             current_env_name: selected_env.read().clone(),
                             on_fire: move |_| fire.call(()),
                             on_saved: move |_| load_all.call(()),
+                            on_toast: move |msg: String| toast.set(Some(msg)),
                         }
                     } else {
                         div { class: "pane-hdr",
@@ -551,8 +564,11 @@ pub fn App() -> Element {
                                         button {
                                             class: "btn icon",
                                             title: "copy response body",
-                                            onclick: move |_| copy_to_clipboard(&body),
-                                            "⎘"
+                                            onclick: move |_| {
+                                                copy_to_clipboard(&body);
+                                                toast.set(Some("response copied".into()));
+                                            },
+                                            "📋"
                                         }
                                     }
                                 }
@@ -632,6 +648,10 @@ pub fn App() -> Element {
                         vault_exists.set(true);
                     },
                 }
+            }
+
+            if let Some(msg) = toast.read().as_ref() {
+                div { class: "toast", "{msg}" }
             }
         }
     }
@@ -1278,6 +1298,7 @@ fn RequestEditor(
     current_env_name: Option<String>,
     on_fire: EventHandler<()>,
     on_saved: EventHandler<()>,
+    on_toast: EventHandler<String>,
 ) -> Element {
     let mut method = use_signal(|| req.http.method.clone());
     let (init_url, init_extra_params) = split_url_and_params(&req.http.url);
@@ -1416,14 +1437,18 @@ fn RequestEditor(
                             onclick: move |_| {
                                 let rid = rid.clone();
                                 spawn(async move {
-                                    let _ = api::duplicate_request(&rid).await;
-                                    on_saved.call(());
+                                    if api::duplicate_request(&rid).await.is_ok() {
+                                        on_toast.call("request duplicated".into());
+                                        on_saved.call(());
+                                    } else {
+                                        on_toast.call("duplicate failed".into());
+                                    }
                                 });
                             },
-                            "⧉"
+                            "❏"
                         }
                         button {
-                            class: "btn icon",
+                            class: "btn icon wide",
                             title: "copy as curl",
                             onclick: move |_| {
                                 let rid = rid2.clone();
@@ -1431,10 +1456,11 @@ fn RequestEditor(
                                 spawn(async move {
                                     if let Ok(s) = api::to_curl(&rid, env.as_deref()).await {
                                         copy_to_clipboard(&s);
+                                        on_toast.call("curl copied".into());
                                     }
                                 });
                             },
-                            "⎘"
+                            "</>"
                         }
                         button {
                             class: "btn icon danger",
