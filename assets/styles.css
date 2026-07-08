@@ -381,3 +381,17 @@ body { overflow: hidden; }
 
 .history-row { cursor: pointer; padding: 4px 6px; border-radius: 3px; }
 .history-row:hover { background: var(--bg3); }
+
+/* JSON tree */
+.json-tree { font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.5; }
+.j-toggle { cursor: pointer; user-select: none; color: var(--fg-mute); }
+.j-toggle:hover { color: var(--accent); }
+.j-body { padding-left: 20px; border-left: 1px solid var(--border); margin-left: 4px; }
+.j-line { display: block; }
+.j-key { color: var(--accent); }
+.j-str { color: var(--ok); }
+.j-num { color: var(--warn); }
+.j-bool { color: var(--patch); }
+.j-null { color: var(--fg-mute); font-style: italic; }
+.j-punct { color: var(--fg-dim); }
+.j-summary { color: var(--fg-mute); font-style: italic; }

@@ -655,7 +655,11 @@ pub fn App() -> Element {
                                     }
                                 }
                             }
-                            pre { class: "body-json", "{resp.body}" }
+                            if resp.is_json {
+                                JsonTree { text: resp.body.clone() }
+                            } else {
+                                pre { class: "body-json", "{resp.body}" }
+                            }
                         } else {
                             div { class: "muted center", "no response yet" }
                         }
@@ -1739,6 +1743,143 @@ fn KVEditor(items: Signal<Vec<KV>>, on_change: EventHandler<()>) -> Element {
                     on_change.call(());
                 },
                 "+ add"
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// JSON tree renderer
+// -----------------------------------------------------------------------------
+
+/// Collapsible JSON viewer. Falls back to plain text if the input isn't valid
+/// JSON. Object/array nodes toggle via click; state is local — collapsing all
+/// on one response has no effect on the next.
+#[component]
+fn JsonTree(text: String) -> Element {
+    // parse once; if it fails, render as a plain pre block
+    let parsed = serde_json::from_str::<serde_json::Value>(&text);
+    let collapsed = use_signal(std::collections::HashSet::<String>::new);
+    match parsed {
+        Ok(v) => rsx! {
+            pre { class: "body-json json-tree",
+                JsonNode { path: "".to_string(), value: v, collapsed, is_last: true }
+            }
+        },
+        Err(_) => rsx! { pre { class: "body-json", "{text}" } },
+    }
+}
+
+#[component]
+fn JsonNode(
+    path: String,
+    value: serde_json::Value,
+    collapsed: Signal<std::collections::HashSet<String>>,
+    is_last: bool,
+) -> Element {
+    let comma = if is_last { "" } else { "," };
+    match value {
+        serde_json::Value::Null => rsx! { span { class: "j-null", "null{comma}" } },
+        serde_json::Value::Bool(b) => rsx! { span { class: "j-bool", "{b}{comma}" } },
+        serde_json::Value::Number(n) => rsx! { span { class: "j-num", "{n}{comma}" } },
+        serde_json::Value::String(s) => {
+            let escaped = serde_json::to_string(&s).unwrap_or_else(|_| format!("\"{}\"", s));
+            rsx! { span { class: "j-str", "{escaped}{comma}" } }
+        }
+        serde_json::Value::Array(arr) => {
+            let is_collapsed = collapsed.read().contains(&path);
+            let path_click = path.clone();
+            let count = arr.len();
+            if count == 0 {
+                return rsx! { span { class: "j-punct", "[]{comma}" } };
+            }
+            let mut sig = collapsed;
+            rsx! {
+                span {
+                    span {
+                        class: "j-toggle",
+                        onclick: move |_| {
+                            let mut s = sig.read().clone();
+                            if !s.insert(path_click.clone()) { s.remove(&path_click); }
+                            sig.set(s);
+                        },
+                        if is_collapsed { "▶ " } else { "▼ " }
+                    }
+                    span { class: "j-punct", "[" }
+                    if is_collapsed {
+                        span { class: "j-summary", " {count} items " }
+                        span { class: "j-punct", "]{comma}" }
+                    } else {
+                        div { class: "j-body",
+                            for (i, item) in arr.iter().enumerate() {
+                                {
+                                    let child_path = format!("{}/{}", path, i);
+                                    rsx! {
+                                        div { class: "j-line",
+                                            JsonNode {
+                                                path: child_path,
+                                                value: item.clone(),
+                                                collapsed: sig,
+                                                is_last: i + 1 == count,
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        span { class: "j-punct", "]{comma}" }
+                    }
+                }
+            }
+        }
+        serde_json::Value::Object(obj) => {
+            let is_collapsed = collapsed.read().contains(&path);
+            let path_click = path.clone();
+            let count = obj.len();
+            if count == 0 {
+                return rsx! { span { class: "j-punct", "{{}}{comma}" } };
+            }
+            let mut sig = collapsed;
+            let entries: Vec<(String, serde_json::Value)> = obj.into_iter().collect();
+            rsx! {
+                span {
+                    span {
+                        class: "j-toggle",
+                        onclick: move |_| {
+                            let mut s = sig.read().clone();
+                            if !s.insert(path_click.clone()) { s.remove(&path_click); }
+                            sig.set(s);
+                        },
+                        if is_collapsed { "▶ " } else { "▼ " }
+                    }
+                    span { class: "j-punct", "{{" }
+                    if is_collapsed {
+                        span { class: "j-summary", " {count} keys " }
+                        span { class: "j-punct", "}}{comma}" }
+                    } else {
+                        div { class: "j-body",
+                            for (i, (k, v)) in entries.iter().enumerate() {
+                                {
+                                    let child_path = format!("{}/{}", path, k);
+                                    let key_str = serde_json::to_string(k).unwrap_or_else(|_| format!("\"{}\"", k));
+                                    rsx! {
+                                        div { class: "j-line",
+                                            span { class: "j-key", "{key_str}" }
+                                            span { class: "j-punct", ": " }
+                                            JsonNode {
+                                                path: child_path,
+                                                value: v.clone(),
+                                                collapsed: sig,
+                                                is_last: i + 1 == count,
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        span { class: "j-punct", "}}{comma}" }
+                    }
+                }
             }
         }
     }
