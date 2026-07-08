@@ -1757,16 +1757,56 @@ fn KVEditor(items: Signal<Vec<KV>>, on_change: EventHandler<()>) -> Element {
 /// on one response has no effect on the next.
 #[component]
 fn JsonTree(text: String) -> Element {
-    // parse once; if it fails, render as a plain pre block
+    // Parse once; on failure, render as plain pre. On success, seed the
+    // collapsed set with every path deeper than DEFAULT_DEPTH so large
+    // responses don't hang the WebView on mount. User expands what they want.
+    const DEFAULT_DEPTH: usize = 2;
     let parsed = serde_json::from_str::<serde_json::Value>(&text);
-    let collapsed = use_signal(std::collections::HashSet::<String>::new);
+    let text_for_fallback = text.clone();
     match parsed {
-        Ok(v) => rsx! {
-            pre { class: "body-json json-tree",
-                JsonNode { path: "".to_string(), value: v, collapsed, is_last: true }
+        Ok(v) => {
+            let mut initial = std::collections::HashSet::<String>::new();
+            seed_deep_collapsed(&v, "", 0, DEFAULT_DEPTH, &mut initial);
+            let collapsed = use_signal(move || initial.clone());
+            rsx! {
+                pre { class: "body-json json-tree",
+                    JsonNode { path: "".to_string(), value: v, collapsed, is_last: true }
+                }
             }
-        },
-        Err(_) => rsx! { pre { class: "body-json", "{text}" } },
+        }
+        Err(_) => rsx! { pre { class: "body-json", "{text_for_fallback}" } },
+    }
+}
+
+/// Walk the parsed JSON and collect paths that should start collapsed:
+/// anything deeper than `max_depth`, plus large arrays regardless of depth.
+fn seed_deep_collapsed(
+    v: &serde_json::Value,
+    path: &str,
+    depth: usize,
+    max_depth: usize,
+    out: &mut std::collections::HashSet<String>,
+) {
+    match v {
+        serde_json::Value::Array(arr) => {
+            if depth >= max_depth || arr.len() > 20 {
+                out.insert(path.to_string());
+            }
+            for (i, item) in arr.iter().enumerate() {
+                let child = format!("{}/{}", path, i);
+                seed_deep_collapsed(item, &child, depth + 1, max_depth, out);
+            }
+        }
+        serde_json::Value::Object(obj) => {
+            if depth >= max_depth {
+                out.insert(path.to_string());
+            }
+            for (k, val) in obj.iter() {
+                let child = format!("{}/{}", path, k);
+                seed_deep_collapsed(val, &child, depth + 1, max_depth, out);
+            }
+        }
+        _ => {}
     }
 }
 
