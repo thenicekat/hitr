@@ -49,7 +49,17 @@ Grab the `.dmg` for your arch from the [latest release](https://github.com/theni
 - Apple Silicon (M1/M2/M3/M4): `hitr_<version>_aarch64.dmg`
 - Intel: `hitr_<version>_x64.dmg`
 
-Open the DMG, drag `hitr.app` to `/Applications`. First launch: **right-click → Open → Open** (Gatekeeper first-run prompt since the build isn't Apple-notarized). After that, double-click works.
+Open the DMG and drag `hitr.app` to `/Applications`.
+
+**Gatekeeper will complain** because the build isn't notarized (no Apple Developer cert — costs $99/yr, skipped for now). Strip the quarantine flag once:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/hitr.app
+```
+
+Then launch normally. Alternative: right-click `hitr.app` → **Open** → **Open** in the confirmation dialog. Both work; `xattr` is one-shot and the app opens cleanly on every subsequent launch.
+
+If macOS still refuses ("hitr is damaged"), the download attribute wasn't cleared — re-run `xattr` targeting the actual path, or try the same command on the `.dmg` before opening it.
 
 ### From source
 
