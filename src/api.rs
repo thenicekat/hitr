@@ -274,3 +274,9 @@ pub async fn to_curl(request_id: &str, env_name: Option<&str>) -> Result<String,
     )
     .await
 }
+pub async fn load_history(request_id: &str) -> Result<Vec<FiredResponse>, String> {
+    call("load_history", RequestIdArg { request_id }).await
+}
+pub async fn clear_history(request_id: &str) -> Result<(), String> {
+    call_unit("clear_history", RequestIdArg { request_id }).await
+}

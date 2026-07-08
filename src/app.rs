@@ -314,7 +314,23 @@ pub fn App() -> Element {
     let total_reqs = use_memo(move || collection.read().requests.len());
     let shown_reqs = use_memo(move || filtered_reqs.read().len());
 
-    let mut history = use_signal(std::collections::HashMap::<String, Vec<FiredResponse>>::new);
+    // History for the currently-selected request. Reloaded from disk on
+    // selection change and after every fire; never in-memory-only.
+    let mut history = use_signal(Vec::<FiredResponse>::new);
+    use_effect(move || {
+        let rid = selected_req.read().clone();
+        spawn(async move {
+            let Some(rid) = rid else {
+                history.set(Vec::new());
+                return;
+            };
+            match api::load_history(&rid).await {
+                Ok(h) => history.set(h),
+                Err(_) => history.set(Vec::new()),
+            }
+        });
+    });
+
     let fire = use_callback(move |()| {
         let req_id = selected_req.read().clone();
         let env_name = selected_env.read().clone();
@@ -325,12 +341,12 @@ pub fn App() -> Element {
         spawn(async move {
             match api::fire_request(&req_id, env_name.as_deref()).await {
                 Ok(r) => {
-                    let mut h = history.read().clone();
-                    let entry = h.entry(req_id.clone()).or_insert_with(Vec::new);
-                    entry.insert(0, r.clone());
-                    entry.truncate(10);
-                    history.set(h);
                     response.set(Some(r));
+                    // Reload from disk to pick up the newly-appended entry
+                    // (backend wrote it in fire_request).
+                    if let Ok(h) = api::load_history(&req_id).await {
+                        history.set(h);
+                    }
                 }
                 Err(e) => error.set(Some(format!("fire: {}", e))),
             }
@@ -574,16 +590,36 @@ pub fn App() -> Element {
                                 }
                             }
                             {
-                                let rid = selected_req.read().clone();
-                                let hist = rid.as_ref().and_then(|id| history.read().get(id).cloned()).unwrap_or_default();
+                                let hist = history.read().clone();
                                 if hist.len() > 1 {
+                                    let rid_for_clear = selected_req.read().clone();
                                     rsx! {
                                         details { class: "headers",
                                             summary { "history ({hist.len()})" }
+                                            if let Some(rid) = rid_for_clear {
+                                                button {
+                                                    class: "btn small ghost",
+                                                    onclick: move |_| {
+                                                        let rid = rid.clone();
+                                                        spawn(async move {
+                                                            if api::clear_history(&rid).await.is_ok() {
+                                                                history.set(Vec::new());
+                                                            }
+                                                        });
+                                                    },
+                                                    "clear"
+                                                }
+                                            }
                                             for (i, h) in hist.iter().enumerate() {
-                                                div { class: "hdr", key: "{i}",
-                                                    span { class: "hdr-k", "#{i} · {h.status} {h.status_text}" }
-                                                    span { class: "hdr-v", "{h.latency_ms} ms" }
+                                                {
+                                                    let h_clone = h.clone();
+                                                    rsx! {
+                                                        div { class: "hdr history-row", key: "{i}",
+                                                            onclick: move |_| response.set(Some(h_clone.clone())),
+                                                            span { class: "hdr-k", "#{i} · {h.status} {h.status_text}" }
+                                                            span { class: "hdr-v", "{h.latency_ms} ms" }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }

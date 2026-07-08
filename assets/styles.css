@@ -378,3 +378,6 @@ body { overflow: hidden; }
   font-family: ui-monospace, monospace;
   font-size: 11px;
 }
+
+.history-row { cursor: pointer; padding: 4px 6px; border-radius: 3px; }
+.history-row:hover { background: var(--bg3); }

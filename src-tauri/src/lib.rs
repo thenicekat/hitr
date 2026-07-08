@@ -15,6 +15,7 @@
 //! `spawn_blocking` so the IPC event loop stays responsive.
 
 mod curl;
+mod history;
 mod http;
 mod loader;
 mod model;
@@ -484,7 +485,25 @@ async fn fire_request(
     } else {
         None
     };
-    http::fire(&req, env.as_ref(), vault_data.as_ref()).await
+    let resp = http::fire(&req, env.as_ref(), vault_data.as_ref()).await?;
+    let root = state.root.lock().unwrap().clone();
+    let _ = history::append(&root, &request_id, &resp);
+    Ok(resp)
+}
+
+#[tauri::command]
+fn load_history(
+    state: State<AppState>,
+    request_id: String,
+) -> Result<Vec<http::FiredResponse>, String> {
+    let root = state.root.lock().unwrap().clone();
+    history::load(&root, &request_id)
+}
+
+#[tauri::command]
+fn clear_history(state: State<AppState>, request_id: String) -> Result<(), String> {
+    let root = state.root.lock().unwrap().clone();
+    history::clear(&root, &request_id)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -525,6 +544,8 @@ pub fn run() {
             duplicate_request,
             to_curl,
             fire_request,
+            load_history,
+            clear_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

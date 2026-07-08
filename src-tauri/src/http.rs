@@ -7,11 +7,11 @@
 
 use crate::model::*;
 use crate::vault::{self, VaultData};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Instant;
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FiredResponse {
     pub status: u16,
     pub status_text: String,
