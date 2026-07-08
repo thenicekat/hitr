@@ -44,7 +44,7 @@ hitr/
 │       ├── main.rs           # `hitr_lib::run()` shim
 │       ├── lib.rs            # command handlers + AppState + Tauri Builder
 │       ├── model.rs          # canonical structs (Env, Request, HttpSpec…)
-│       ├── loader.rs         # walk collection dir, parse Bruno YAML, write back
+│       ├── loader.rs         # walk collection dir, parse request/env YAML, write back
 │       ├── http.rs           # reqwest-based fire, {{var}} substitution
 │       ├── vault.rs          # age-encrypted secrets file
 │       └── curl.rs           # tokenizer + parser for `curl` command strings
@@ -94,8 +94,8 @@ App::response signal set → view re-renders
 
 | Kind | Format | Location | Notes |
 |---|---|---|---|
-| Requests | Bruno YAML | `<root>/<folder>/<name>.yml` | We write these back via `loader::write_request` when the user saves edits. Runtime fields (`path`, `rel_path`, `id`) stripped before write. |
-| Envs | Bruno YAML | `<root>/environments/<name>.yml` | Contains variable *names* only. Non-secret values inline. Secret values are absent — they're in the vault. |
+| Requests | YAML | `<root>/<folder>/<name>.yml` | We write these back via `loader::write_request` when the user saves edits. Runtime fields (`path`, `rel_path`, `id`) stripped before write. Format matches Bruno's for round-trip compat. |
+| Envs | YAML | `<root>/environments/<name>.yml` | Contains variable *names* only. Non-secret values inline. Secret values are absent — they're in the vault. |
 | Secrets | age-encrypted JSON | `~/Library/Application Support/hitr/vault.age` | Passphrase-derived key, ChaCha20-Poly1305. Written atomically via tmp+rename. |
 | Config | JSON | `~/Library/Application Support/hitr/config.json` | Just the collection root path. |
 
@@ -110,7 +110,7 @@ Dioxus 0.7 signals. Rules that matter:
 - `use_callback(|arg| …)` returns a stable `Callback<T>` — pass to child components to avoid prop-eq breakage.
 - `use_memo(|| …)` recomputes only when subscribed inputs change.
 
-The 300-row render cap (`RENDER_CAP` in `App`) exists because rendering all ~1500 rows in a Bruno collection freezes the WebView on click. Filter narrows through the full list; only the display truncates.
+The 300-row render cap (`RENDER_CAP` in `App`) exists because rendering all ~1500 rows in a large collection freezes the WebView on click. Filter narrows through the full list; only the display truncates.
 
 ## Tauri IPC contract
 

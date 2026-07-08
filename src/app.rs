@@ -421,6 +421,26 @@ pub fn App() -> Element {
                             }
                         },
                     }
+                    button {
+                        class: "btn small",
+                        title: "browse for folder",
+                        onclick: move |_| {
+                            spawn(async move {
+                                if let Ok(Some(picked)) = api::pick_folder().await {
+                                    match api::set_root(&picked).await {
+                                        Ok(_) => {
+                                            editing_root.set(false);
+                                            selected_env.set(None);
+                                            selected_req.set(None);
+                                            load_all.call(());
+                                        }
+                                        Err(err) => error.set(Some(format!("set_root: {}", err))),
+                                    }
+                                }
+                            });
+                        },
+                        "browse"
+                    }
                     button { class: "btn small", onclick: move |_| editing_root.set(false), "cancel" }
                 } else {
                     span { class: "root",

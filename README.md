@@ -1,8 +1,8 @@
 # hitr
 
-Fast, native REST client for [Bruno](https://www.usebruno.com/)-format collections. Rust + Tauri + Dioxus. No Electron, no Node runtime.
+Fast, native REST client with plain-text YAML collections. Rust + Tauri + Dioxus. No Electron, no Node runtime, no cloud account.
 
-Built because Bruno's Electron shell is slow and Postman requires a cloud account. This does one thing: read a collection, edit envs, fire requests. Nothing else.
+Built because heavyweight Electron clients are slow and cloud-first tools want your data on their servers. This does one thing: read a collection off disk, edit envs, fire requests. Nothing else.
 
 ## Status
 
@@ -11,9 +11,10 @@ Built because Bruno's Electron shell is slow and Postman requires a cloud accoun
 ## Features
 
 **Collections**
-- Reads Bruno-format `.yml` collections directly — no import step
+- Plain YAML on disk — one file per request, editable in any text editor
 - Import from curl paste (Chrome DevTools "Copy as cURL" works)
 - Import from OpenAPI 3.x spec (yaml or json) — one request per operation, foldered by tag
+- Import existing Bruno collections directly (same YAML shape)
 - Create / duplicate / delete / rename requests
 - Fuzzy search over 1000+ requests
 
@@ -37,7 +38,7 @@ Built because Bruno's Electron shell is slow and Postman requires a cloud accoun
 - Copy response body or copy request as curl (with resolved vars) to clipboard
 
 **Ops**
-- ~15 MB single binary, ~50 ms warm start (vs Bruno's 3-5 s Electron boot)
+- ~15 MB single binary, ~50 ms warm start
 - No Node runtime, no cloud account, no plugins, no telemetry
 
 ## Install
@@ -95,8 +96,8 @@ Point hitr at your collection root: click `root: /...` in the topbar, paste a pa
 
 | Data                | Where                                                             |
 |---------------------|-------------------------------------------------------------------|
-| Requests            | Bruno YAML at `<root>/<folder>/<name>.yml`                        |
-| Envs                | Bruno YAML at `<root>/environments/<name>.yml` (variable *names* + non-secret values) |
+| Requests            | YAML at `<root>/<folder>/<name>.yml`                              |
+| Envs                | YAML at `<root>/environments/<name>.yml` (variable *names* + non-secret values) |
 | Secret values       | age-encrypted vault at `<config>/hitr/vault.age`                 |
 | Config              | `<config>/hitr/config.json` (just the collection root path)      |
 
@@ -132,6 +133,8 @@ Passphrase-derived key, [age](https://age-encryption.org/) format (ChaCha20-Poly
 - `config.json` ❌ (has your local absolute path)
 
 ## Import notes
+
+**Bruno collections** work directly — hitr's YAML shape matches [Bruno's](https://www.usebruno.com/) format (`info`, `http.method`, `http.url`, `http.headers`, `http.body.data`, plus `environments/*.yml`). Point hitr at a Bruno collection root and it just opens. Fields hitr writes are round-trip stable with Bruno.
 
 **curl**: handles `-X`, `-H`, `-d/--data*`, `--json`, quoted args, backslash line-continuation. Ignores `-F/--form` (multipart), cookies, auth flags.
 

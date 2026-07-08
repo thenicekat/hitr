@@ -280,3 +280,30 @@ pub async fn load_history(request_id: &str) -> Result<Vec<FiredResponse>, String
 pub async fn clear_history(request_id: &str) -> Result<(), String> {
     call_unit("clear_history", RequestIdArg { request_id }).await
 }
+
+/// Native OS folder picker. Returns None if user cancels.
+pub async fn pick_folder() -> Result<Option<String>, String> {
+    #[derive(Serialize)]
+    struct DialogOpts {
+        directory: bool,
+        multiple: bool,
+        recursive: bool,
+    }
+    let opts = DialogOpts {
+        directory: true,
+        multiple: false,
+        recursive: false,
+    };
+    let a = to_value(&opts).map_err(|e| e.to_string())?;
+    match invoke("plugin:dialog|open", a).await {
+        Ok(v) => {
+            // returns null on cancel, string on select
+            if v.is_null() || v.is_undefined() {
+                Ok(None)
+            } else {
+                Ok(v.as_string())
+            }
+        }
+        Err(e) => Err(js_err(e)),
+    }
+}
