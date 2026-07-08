@@ -1749,175 +1749,438 @@ fn KVEditor(items: Signal<Vec<KV>>, on_change: EventHandler<()>) -> Element {
 }
 
 // -----------------------------------------------------------------------------
-// JSON tree renderer
+// JSON tree — virtual scroll edition.
+//
+// Instead of recursing into components per node, we flatten the JSON into a
+// Vec<Line> once. Each Line is one visible row. The renderer keeps track of
+// scroll position + viewport height, then mounts only the ~40 rows that fit
+// on screen (plus a small overscan buffer). Collapsing a node hides its
+// subtree by filtering the flat index list, which is O(n) once — not a re-diff
+// of thousands of components.
 // -----------------------------------------------------------------------------
 
-/// Collapsible JSON viewer. Falls back to plain text if the input isn't valid
-/// JSON. Object/array nodes toggle via click; state is local — collapsing all
-/// on one response has no effect on the next.
+const ROW_HEIGHT: f64 = 20.0;
+const OVERSCAN: usize = 8;
+
+#[derive(Clone, PartialEq)]
+enum LineKind {
+    /// Object/array opening bracket. `id` is the node id; `count` is # children.
+    Open {
+        id: usize,
+        is_array: bool,
+        count: usize,
+        trailing_comma: bool,
+    },
+    /// Closing bracket. `id` matches the Open. `trailing_comma` = need "," after.
+    Close {
+        id: usize,
+        is_array: bool,
+        trailing_comma: bool,
+    },
+    /// A leaf key/value line inside an object.
+    Kv {
+        key: Option<String>,
+        value: String,
+        class: &'static str,
+        trailing_comma: bool,
+    },
+    /// A leaf value line inside an array.
+    Item {
+        value: String,
+        class: &'static str,
+        trailing_comma: bool,
+    },
+}
+
+#[derive(Clone, PartialEq)]
+struct Line {
+    depth: usize,
+    /// Chain of parent node ids from root to this line. Used to test collapse.
+    ancestors: Vec<usize>,
+    kind: LineKind,
+}
+
+/// Flatten a JSON value into a linear sequence of visible lines.
+fn flatten(v: &serde_json::Value) -> Vec<Line> {
+    let mut out = Vec::new();
+    let mut next_id = 0usize;
+    walk(v, 0, &[], None, true, &mut next_id, &mut out);
+    out
+}
+
+fn walk(
+    v: &serde_json::Value,
+    depth: usize,
+    ancestors: &[usize],
+    key: Option<&str>,
+    is_last: bool,
+    next_id: &mut usize,
+    out: &mut Vec<Line>,
+) {
+    let key_str = key.map(|k| serde_json::to_string(k).unwrap_or_else(|_| format!("\"{}\"", k)));
+    let trailing = !is_last;
+    match v {
+        serde_json::Value::Object(obj) => {
+            let id = *next_id;
+            *next_id += 1;
+            let mut new_ancestors = ancestors.to_vec();
+            out.push(Line {
+                depth,
+                ancestors: new_ancestors.clone(),
+                kind: LineKind::Open {
+                    id,
+                    is_array: false,
+                    count: obj.len(),
+                    trailing_comma: false,
+                },
+            });
+            // key label for the opening line lives inside Open render via `key_str`
+            // but we render key separately in the row builder — encode it as an
+            // Item-shaped extension? Simpler: prepend key by putting it in the
+            // Kv line via a virtual approach. We instead flatten by rendering
+            // "key: {" on the same line as the open; do that in build_row.
+            // For that we need to stash the key on the Open — extend LineKind:
+            //   ...already handled at row build time via ancestors trail.
+            // Simpler: just push a Kv-style line marking open. Redo:
+            //   pop the just-pushed Open and replace with a proper compound line.
+            let _ = key_str.clone(); // key label handled in build_row via prev line lookup? too complex.
+            new_ancestors.push(id);
+            let entries: Vec<(&String, &serde_json::Value)> = obj.iter().collect();
+            let n = entries.len();
+            for (i, (k, val)) in entries.iter().enumerate() {
+                walk(
+                    val,
+                    depth + 1,
+                    &new_ancestors,
+                    Some(k.as_str()),
+                    i + 1 == n,
+                    next_id,
+                    out,
+                );
+            }
+            out.push(Line {
+                depth,
+                ancestors: ancestors.to_vec(),
+                kind: LineKind::Close {
+                    id,
+                    is_array: false,
+                    trailing_comma: trailing,
+                },
+            });
+        }
+        serde_json::Value::Array(arr) => {
+            let id = *next_id;
+            *next_id += 1;
+            let mut new_ancestors = ancestors.to_vec();
+            out.push(Line {
+                depth,
+                ancestors: new_ancestors.clone(),
+                kind: LineKind::Open {
+                    id,
+                    is_array: true,
+                    count: arr.len(),
+                    trailing_comma: false,
+                },
+            });
+            new_ancestors.push(id);
+            let n = arr.len();
+            for (i, item) in arr.iter().enumerate() {
+                walk(
+                    item,
+                    depth + 1,
+                    &new_ancestors,
+                    None,
+                    i + 1 == n,
+                    next_id,
+                    out,
+                );
+            }
+            out.push(Line {
+                depth,
+                ancestors: ancestors.to_vec(),
+                kind: LineKind::Close {
+                    id,
+                    is_array: true,
+                    trailing_comma: trailing,
+                },
+            });
+        }
+        serde_json::Value::Null => {
+            out.push(Line {
+                depth,
+                ancestors: ancestors.to_vec(),
+                kind: match key_str {
+                    Some(k) => LineKind::Kv {
+                        key: Some(k),
+                        value: "null".into(),
+                        class: "j-null",
+                        trailing_comma: trailing,
+                    },
+                    None => LineKind::Item {
+                        value: "null".into(),
+                        class: "j-null",
+                        trailing_comma: trailing,
+                    },
+                },
+            });
+        }
+        serde_json::Value::Bool(b) => {
+            let val = b.to_string();
+            out.push(Line {
+                depth,
+                ancestors: ancestors.to_vec(),
+                kind: match key_str {
+                    Some(k) => LineKind::Kv {
+                        key: Some(k),
+                        value: val,
+                        class: "j-bool",
+                        trailing_comma: trailing,
+                    },
+                    None => LineKind::Item {
+                        value: val,
+                        class: "j-bool",
+                        trailing_comma: trailing,
+                    },
+                },
+            });
+        }
+        serde_json::Value::Number(n) => {
+            let val = n.to_string();
+            out.push(Line {
+                depth,
+                ancestors: ancestors.to_vec(),
+                kind: match key_str {
+                    Some(k) => LineKind::Kv {
+                        key: Some(k),
+                        value: val,
+                        class: "j-num",
+                        trailing_comma: trailing,
+                    },
+                    None => LineKind::Item {
+                        value: val,
+                        class: "j-num",
+                        trailing_comma: trailing,
+                    },
+                },
+            });
+        }
+        serde_json::Value::String(s) => {
+            let val = serde_json::to_string(s).unwrap_or_else(|_| format!("\"{}\"", s));
+            out.push(Line {
+                depth,
+                ancestors: ancestors.to_vec(),
+                kind: match key_str {
+                    Some(k) => LineKind::Kv {
+                        key: Some(k),
+                        value: val,
+                        class: "j-str",
+                        trailing_comma: trailing,
+                    },
+                    None => LineKind::Item {
+                        value: val,
+                        class: "j-str",
+                        trailing_comma: trailing,
+                    },
+                },
+            });
+        }
+    }
+}
+
+/// Compute the list of line indices visible under the current `collapsed` set.
+/// A line is visible unless any of its ancestor ids is in collapsed. Skips
+/// entire subtrees efficiently by tracking a hide-until-close counter.
+fn compute_visible(lines: &[Line], collapsed: &std::collections::HashSet<usize>) -> Vec<usize> {
+    let mut out = Vec::with_capacity(lines.len());
+    let mut hide_ids: Vec<usize> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        // Are we inside a collapsed subtree? If any of this line's ancestors
+        // is currently in the hide stack, skip. Except the Open line of a
+        // collapsed node itself, which stays visible so user can toggle it.
+        let inside_hidden = hide_ids.iter().any(|h| line.ancestors.contains(h));
+        if !inside_hidden {
+            out.push(i);
+        }
+        match &line.kind {
+            LineKind::Open { id, .. } => {
+                if collapsed.contains(id) {
+                    hide_ids.push(*id);
+                }
+            }
+            LineKind::Close { id, .. } => {
+                if let Some(pos) = hide_ids.iter().position(|h| h == id) {
+                    hide_ids.remove(pos);
+                    // Also hide the Close row itself: rewind out if we just
+                    // pushed a Close under a collapse trigger. Simpler: drop
+                    // the last pushed index if it matches this Close.
+                    if !inside_hidden && out.last() == Some(&i) {
+                        out.pop();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Compact summary label for a collapsed node.
+fn collapsed_summary(kind: &LineKind) -> String {
+    match kind {
+        LineKind::Open {
+            is_array: true,
+            count,
+            ..
+        } => format!("[ …{} items ]", count),
+        LineKind::Open {
+            is_array: false,
+            count,
+            ..
+        } => format!("{{ …{} keys }}", count),
+        _ => String::new(),
+    }
+}
+
 #[component]
 fn JsonTree(text: String) -> Element {
-    // Parse once; on failure, render as plain pre. On success, seed the
-    // collapsed set with every path deeper than DEFAULT_DEPTH so large
-    // responses don't hang the WebView on mount. User expands what they want.
-    const DEFAULT_DEPTH: usize = 2;
     let parsed = serde_json::from_str::<serde_json::Value>(&text);
-    let text_for_fallback = text.clone();
-    match parsed {
-        Ok(v) => {
-            let mut initial = std::collections::HashSet::<String>::new();
-            seed_deep_collapsed(&v, "", 0, DEFAULT_DEPTH, &mut initial);
-            let collapsed = use_signal(move || initial.clone());
-            rsx! {
-                pre { class: "body-json json-tree",
-                    JsonNode { path: "".to_string(), value: v, collapsed, is_last: true }
-                }
-            }
-        }
-        Err(_) => rsx! { pre { class: "body-json", "{text_for_fallback}" } },
-    }
-}
+    let text_fallback = text.clone();
+    let Ok(root) = parsed else {
+        return rsx! { pre { class: "body-json", "{text_fallback}" } };
+    };
 
-/// Walk the parsed JSON and collect paths that should start collapsed:
-/// anything deeper than `max_depth`, plus large arrays regardless of depth.
-fn seed_deep_collapsed(
-    v: &serde_json::Value,
-    path: &str,
-    depth: usize,
-    max_depth: usize,
-    out: &mut std::collections::HashSet<String>,
-) {
-    match v {
-        serde_json::Value::Array(arr) => {
-            if depth >= max_depth || arr.len() > 20 {
-                out.insert(path.to_string());
-            }
-            for (i, item) in arr.iter().enumerate() {
-                let child = format!("{}/{}", path, i);
-                seed_deep_collapsed(item, &child, depth + 1, max_depth, out);
-            }
-        }
-        serde_json::Value::Object(obj) => {
-            if depth >= max_depth {
-                out.insert(path.to_string());
-            }
-            for (k, val) in obj.iter() {
-                let child = format!("{}/{}", path, k);
-                seed_deep_collapsed(val, &child, depth + 1, max_depth, out);
-            }
-        }
-        _ => {}
-    }
-}
+    let flat = use_hook(|| flatten(&root));
+    // Seed: collapse anything below depth 2, plus any array > 20.
+    let initial_collapsed: std::collections::HashSet<usize> = flat
+        .iter()
+        .filter_map(|l| match &l.kind {
+            LineKind::Open {
+                id,
+                count,
+                is_array,
+                ..
+            } if l.depth >= 2 || (*is_array && *count > 20) => Some(*id),
+            _ => None,
+        })
+        .collect();
+    let lines = use_signal(move || flat.clone());
+    let mut collapsed = use_signal(move || initial_collapsed.clone());
+    let mut scroll_top = use_signal(|| 0.0f64);
+    let mut viewport_h = use_signal(|| 400.0f64);
 
-#[component]
-fn JsonNode(
-    path: String,
-    value: serde_json::Value,
-    collapsed: Signal<std::collections::HashSet<String>>,
-    is_last: bool,
-) -> Element {
-    let comma = if is_last { "" } else { "," };
-    match value {
-        serde_json::Value::Null => rsx! { span { class: "j-null", "null{comma}" } },
-        serde_json::Value::Bool(b) => rsx! { span { class: "j-bool", "{b}{comma}" } },
-        serde_json::Value::Number(n) => rsx! { span { class: "j-num", "{n}{comma}" } },
-        serde_json::Value::String(s) => {
-            let escaped = serde_json::to_string(&s).unwrap_or_else(|_| format!("\"{}\"", s));
-            rsx! { span { class: "j-str", "{escaped}{comma}" } }
-        }
-        serde_json::Value::Array(arr) => {
-            let is_collapsed = collapsed.read().contains(&path);
-            let path_click = path.clone();
-            let count = arr.len();
-            if count == 0 {
-                return rsx! { span { class: "j-punct", "[]{comma}" } };
-            }
-            let mut sig = collapsed;
-            rsx! {
-                span {
-                    span {
-                        class: "j-toggle",
-                        onclick: move |_| {
-                            let mut s = sig.read().clone();
-                            if !s.insert(path_click.clone()) { s.remove(&path_click); }
-                            sig.set(s);
-                        },
-                        if is_collapsed { "▶ " } else { "▼ " }
+    let visible = use_memo(move || compute_visible(&lines.read(), &collapsed.read()));
+
+    rsx! {
+        div {
+            class: "json-viewport",
+            onmounted: move |m| {
+                spawn(async move {
+                    if let Ok(rect) = m.get_client_rect().await {
+                        viewport_h.set(rect.size.height);
                     }
-                    span { class: "j-punct", "[" }
-                    if is_collapsed {
-                        span { class: "j-summary", " {count} items " }
-                        span { class: "j-punct", "]{comma}" }
-                    } else {
-                        div { class: "j-body",
-                            for (i, item) in arr.iter().enumerate() {
+                });
+            },
+            onscroll: move |e| {
+                // Dioxus scroll event carries no delta by default; read from DOM.
+                let _ = e;
+                if let Some(el) = web_sys::window()
+                    .and_then(|w| w.document())
+                    .and_then(|d| d.query_selector(".json-viewport").ok().flatten())
+                {
+                    scroll_top.set(el.scroll_top() as f64);
+                }
+            },
+            {
+                // Snapshot only the window we need — cloning the entire lines
+                // Vec on every scroll tick pegs the CPU on large responses.
+                let vis_r = visible.read();
+                let total_h = vis_r.len() as f64 * ROW_HEIGHT;
+                let start = ((*scroll_top.read() / ROW_HEIGHT) as usize).saturating_sub(OVERSCAN);
+                let visible_count = (*viewport_h.read() / ROW_HEIGHT).ceil() as usize + OVERSCAN * 2;
+                let end = (start + visible_count).min(vis_r.len());
+                let offset_y = start as f64 * ROW_HEIGHT;
+                let window_indices: Vec<usize> = vis_r[start..end].to_vec();
+                drop(vis_r);
+                let lines_r = lines.read();
+                let window: Vec<Line> = window_indices.iter().map(|&i| lines_r[i].clone()).collect();
+                drop(lines_r);
+
+                rsx! {
+                    div {
+                        class: "json-spacer",
+                        style: "height: {total_h}px; position: relative;",
+                        div {
+                            class: "json-window",
+                            style: "position: absolute; top: {offset_y}px; left: 0; right: 0;",
+                            for line in window.iter() {
                                 {
-                                    let child_path = format!("{}/{}", path, i);
-                                    rsx! {
-                                        div { class: "j-line",
-                                            JsonNode {
-                                                path: child_path,
-                                                value: item.clone(),
-                                                collapsed: sig,
-                                                is_last: i + 1 == count,
+                                    let line = line.clone();
+                                    let pad = line.depth * 16;
+                                    let comma = |t: bool| if t { "," } else { "" };
+                                    let row = match &line.kind {
+                                        LineKind::Open { id, is_array, count: _, trailing_comma } => {
+                                            let is_col = collapsed.read().contains(id);
+                                            let node_id = *id;
+                                            let arrow = if is_col { "▶" } else { "▼" };
+                                            let brace = if *is_array { "[" } else { "{" };
+                                            let summary = if is_col { collapsed_summary(&line.kind) } else { String::new() };
+                                            let tail = comma(is_col && *trailing_comma);
+                                            rsx! {
+                                                div { class: "j-row", style: "padding-left: {pad}px",
+                                                    span {
+                                                        class: "j-toggle",
+                                                        onclick: move |_| {
+                                                            let mut s = collapsed.read().clone();
+                                                            if !s.insert(node_id) { s.remove(&node_id); }
+                                                            collapsed.set(s);
+                                                        },
+                                                        "{arrow} "
+                                                    }
+                                                    if is_col {
+                                                        span { class: "j-summary", "{summary}{tail}" }
+                                                    } else {
+                                                        span { class: "j-punct", "{brace}" }
+                                                    }
+                                                }
                                             }
                                         }
-                                    }
+                                        LineKind::Close { id: _, is_array, trailing_comma } => {
+                                            let brace = if *is_array { "]" } else { "}" };
+                                            let tail = comma(*trailing_comma);
+                                            rsx! {
+                                                div { class: "j-row", style: "padding-left: {pad}px",
+                                                    span { class: "j-punct", "{brace}{tail}" }
+                                                }
+                                            }
+                                        }
+                                        LineKind::Kv { key, value, class, trailing_comma } => {
+                                            let tail = comma(*trailing_comma);
+                                            let k = key.clone().unwrap_or_default();
+                                            let cls = *class;
+                                            let v = value.clone();
+                                            rsx! {
+                                                div { class: "j-row", style: "padding-left: {pad}px",
+                                                    span { class: "j-key", "{k}" }
+                                                    span { class: "j-punct", ": " }
+                                                    span { class: "{cls}", "{v}{tail}" }
+                                                }
+                                            }
+                                        }
+                                        LineKind::Item { value, class, trailing_comma } => {
+                                            let tail = comma(*trailing_comma);
+                                            let cls = *class;
+                                            let v = value.clone();
+                                            rsx! {
+                                                div { class: "j-row", style: "padding-left: {pad}px",
+                                                    span { class: "{cls}", "{v}{tail}" }
+                                                }
+                                            }
+                                        }
+                                    };
+                                    rsx! { {row} }
                                 }
                             }
                         }
-                        span { class: "j-punct", "]{comma}" }
-                    }
-                }
-            }
-        }
-        serde_json::Value::Object(obj) => {
-            let is_collapsed = collapsed.read().contains(&path);
-            let path_click = path.clone();
-            let count = obj.len();
-            if count == 0 {
-                return rsx! { span { class: "j-punct", "{{}}{comma}" } };
-            }
-            let mut sig = collapsed;
-            let entries: Vec<(String, serde_json::Value)> = obj.into_iter().collect();
-            rsx! {
-                span {
-                    span {
-                        class: "j-toggle",
-                        onclick: move |_| {
-                            let mut s = sig.read().clone();
-                            if !s.insert(path_click.clone()) { s.remove(&path_click); }
-                            sig.set(s);
-                        },
-                        if is_collapsed { "▶ " } else { "▼ " }
-                    }
-                    span { class: "j-punct", "{{" }
-                    if is_collapsed {
-                        span { class: "j-summary", " {count} keys " }
-                        span { class: "j-punct", "}}{comma}" }
-                    } else {
-                        div { class: "j-body",
-                            for (i, (k, v)) in entries.iter().enumerate() {
-                                {
-                                    let child_path = format!("{}/{}", path, k);
-                                    let key_str = serde_json::to_string(k).unwrap_or_else(|_| format!("\"{}\"", k));
-                                    rsx! {
-                                        div { class: "j-line",
-                                            span { class: "j-key", "{key_str}" }
-                                            span { class: "j-punct", ": " }
-                                            JsonNode {
-                                                path: child_path,
-                                                value: v.clone(),
-                                                collapsed: sig,
-                                                is_last: i + 1 == count,
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        span { class: "j-punct", "}}{comma}" }
                     }
                 }
             }

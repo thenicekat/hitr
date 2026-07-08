@@ -395,3 +395,49 @@ body { overflow: hidden; }
 .j-null { color: var(--fg-mute); font-style: italic; }
 .j-punct { color: var(--fg-dim); }
 .j-summary { color: var(--fg-mute); font-style: italic; }
+
+/* Virtual-scroll JSON tree */
+.json-viewport {
+  height: 100%;
+  min-height: 300px;
+  max-height: 60vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--bg2);
+  padding: 8px 0;
+  border-radius: 6px;
+  font-family: ui-monospace, monospace;
+  font-size: 12.5px;
+  user-select: text;
+  /* subtle guide grid via repeating gradient — one line per 16px indent */
+  background-image: repeating-linear-gradient(
+    to right,
+    transparent 0,
+    transparent 15px,
+    rgba(255,255,255,0.03) 15px,
+    rgba(255,255,255,0.03) 16px
+  );
+  background-attachment: local;
+}
+.j-row {
+  height: 18px;
+  line-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-right: 8px;
+}
+.j-row:hover { background: rgba(122,162,247,0.06); }
+.j-index { color: var(--fg-mute); font-size: 10.5px; margin-right: 6px; }
+.j-str { color: #a3e77c; }
+.j-num { color: #f0c96b; }
+.j-bool { color: #d19af7; }
+.j-key { color: #8ab4f8; }
+.j-toggle {
+  display: inline-block;
+  width: 14px;
+  color: var(--fg-mute);
+  cursor: pointer;
+  user-select: none;
+}
+.j-toggle:hover { color: var(--accent); }
