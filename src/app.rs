@@ -947,8 +947,30 @@ fn EditEnvModal(env: Env, on_close: EventHandler<()>) -> Element {
                                                 checked: is_secret,
                                                 onchange: move |e| {
                                                     let mut cur = vars.read().clone();
-                                                    cur[idx].secret = e.checked();
-                                                    if e.checked() { cur[idx].value = String::new(); }
+                                                    let now_secret = e.checked();
+                                                    let vname = cur[idx].name.clone();
+                                                    if now_secret {
+                                                        // moving plain → secret: preserve the value
+                                                        // by seeding it into the secret_values map,
+                                                        // then clear the on-disk value field.
+                                                        let existing = cur[idx].value.clone();
+                                                        if !existing.is_empty() {
+                                                            let mut m = secret_values.read().clone();
+                                                            m.insert(vname, existing);
+                                                            secret_values.set(m);
+                                                        }
+                                                        cur[idx].value = String::new();
+                                                    } else {
+                                                        // moving secret → plain: hoist the current
+                                                        // secret value (if any) back into the on-disk
+                                                        // field, and drop it from the secret map.
+                                                        let mut m = secret_values.read().clone();
+                                                        if let Some(v) = m.remove(&vname) {
+                                                            cur[idx].value = v;
+                                                        }
+                                                        secret_values.set(m);
+                                                    }
+                                                    cur[idx].secret = now_secret;
                                                     vars.set(cur);
                                                 },
                                             }
