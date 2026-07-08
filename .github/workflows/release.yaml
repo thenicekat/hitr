@@ -47,6 +47,9 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # ad-hoc sign — no Apple Developer cert, but bypasses xattr for
+          # most users. First launch still shows Gatekeeper right-click prompt.
+          APPLE_SIGNING_IDENTITY: "-"
         with:
           tagName: ${{ github.ref_name }}
           releaseName: ${{ github.ref_name }}

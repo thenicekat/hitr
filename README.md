@@ -42,20 +42,29 @@ Built because Bruno's Electron shell is slow and Postman requires a cloud accoun
 
 ## Install
 
+### macOS (prebuilt)
+
+Grab the `.dmg` for your arch from the [latest release](https://github.com/thenicekat/hitr/releases/latest):
+
+- Apple Silicon (M1/M2/M3/M4): `hitr_<version>_aarch64.dmg`
+- Intel: `hitr_<version>_x64.dmg`
+
+Open the DMG, drag `hitr.app` to `/Applications`. First launch: **right-click → Open → Open** (Gatekeeper first-run prompt since the build isn't Apple-notarized). After that, double-click works.
+
+### From source
+
 ```bash
-# prereqs
 rustup target add wasm32-unknown-unknown
 cargo install dioxus-cli --locked
 cargo install tauri-cli --version '^2.0.0' --locked
 
-# build & run
-git clone https://github.com/<you>/hitr
+git clone https://github.com/thenicekat/hitr
 cd hitr
 cargo tauri dev              # dev mode with hot reload
-cargo tauri build            # release .app bundle in src-tauri/target/release/bundle/macos
+cargo tauri build            # release bundle in src-tauri/target/release/bundle/macos
 ```
 
-Point hitr at your collection root via the topbar path (or edit `~/Library/Application Support/hitr/config.json`).
+Point hitr at your collection root: click `root: /...` in the topbar, paste a path, Enter.
 
 ## Layout
 
