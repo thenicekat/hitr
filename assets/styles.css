@@ -441,3 +441,35 @@ body { overflow: hidden; }
   user-select: none;
 }
 .j-toggle:hover { color: var(--accent); }
+
+.json-tree-wrap { display: flex; flex-direction: column; gap: 6px; }
+.json-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+}
+.json-search-input {
+  flex: 1;
+  padding: 4px 8px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+.json-search-input:focus { outline: none; border-color: var(--accent); }
+
+.name-input {
+  flex: 1;
+  padding: 4px 8px;
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.name-input:hover { border-color: var(--border); }
+.name-input:focus { outline: none; border-color: var(--accent); background: var(--bg); }

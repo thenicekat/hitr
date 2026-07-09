@@ -1473,8 +1473,43 @@ fn RequestEditor(
         });
     });
 
+    let mut name_input = use_signal(|| req.info.name.clone());
+    let mut rename_pending = use_signal(|| false);
+    let mut rename_err = use_signal(|| None::<String>);
+    let orig_id = req.id.clone();
+
     rsx! {
         div { class: "req-editor",
+            div { class: "req-line",
+                input {
+                    class: "name-input",
+                    value: "{name_input}",
+                    placeholder: "request name",
+                    oninput: move |e| {
+                        name_input.set(e.value());
+                        rename_pending.set(true);
+                    },
+                    onblur: move |_| {
+                        if !*rename_pending.peek() { return; }
+                        let rid = orig_id.clone();
+                        let new_name = name_input.read().trim().to_string();
+                        if new_name.is_empty() {
+                            rename_err.set(Some("name required".into()));
+                            return;
+                        }
+                        rename_pending.set(false);
+                        spawn(async move {
+                            match api::rename_request(&rid, &new_name).await {
+                                Ok(_) => { rename_err.set(None); on_saved.call(()); }
+                                Err(e) => rename_err.set(Some(e)),
+                            }
+                        });
+                    },
+                }
+            }
+            if let Some(e) = rename_err.read().as_ref() {
+                div { class: "error small", "{e}" }
+            }
             div { class: "req-line",
                 select {
                     class: "method-select method-{method.read().to_lowercase()}",
@@ -1990,7 +2025,56 @@ fn walk(
 /// Compute the list of line indices visible under the current `collapsed` set.
 /// A line is visible unless any of its ancestor ids is in collapsed. Skips
 /// entire subtrees efficiently by tracking a hide-until-close counter.
-fn compute_visible(lines: &[Line], collapsed: &std::collections::HashSet<usize>) -> Vec<usize> {
+fn line_matches(line: &Line, needle_lower: &str) -> bool {
+    match &line.kind {
+        LineKind::Kv { key, value, .. } => {
+            key.as_deref()
+                .map(|k| k.to_lowercase().contains(needle_lower))
+                .unwrap_or(false)
+                || value.to_lowercase().contains(needle_lower)
+        }
+        LineKind::Item { value, .. } => value.to_lowercase().contains(needle_lower),
+        _ => false,
+    }
+}
+
+fn compute_visible(
+    lines: &[Line],
+    collapsed: &std::collections::HashSet<usize>,
+    query: &str,
+) -> Vec<usize> {
+    // Search mode: find matching lines, force-expand their ancestor chain, keep
+    // only matches + their Open/Close bracket rows for context.
+    if !query.is_empty() {
+        let needle = query.to_lowercase();
+        let mut keep_ancestors: std::collections::HashSet<usize> = Default::default();
+        let mut matched_indices: Vec<usize> = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            if line_matches(line, &needle) {
+                matched_indices.push(i);
+                for a in &line.ancestors {
+                    keep_ancestors.insert(*a);
+                }
+            }
+        }
+        // Include matched lines + Open/Close rows whose id is a kept ancestor
+        // (so structure remains visible around matches).
+        let mut out: Vec<usize> = Vec::with_capacity(matched_indices.len() * 3);
+        for (i, line) in lines.iter().enumerate() {
+            let keep = matched_indices.binary_search(&i).is_ok()
+                || match &line.kind {
+                    LineKind::Open { id, .. } | LineKind::Close { id, .. } => {
+                        keep_ancestors.contains(id)
+                    }
+                    _ => false,
+                };
+            if keep {
+                out.push(i);
+            }
+        }
+        return out;
+    }
+
     let mut out = Vec::with_capacity(lines.len());
     let mut hide_ids: Vec<usize> = Vec::new();
     for (i, line) in lines.iter().enumerate() {
@@ -2067,10 +2151,43 @@ fn JsonTree(text: String) -> Element {
     let mut collapsed = use_signal(move || initial_collapsed.clone());
     let mut scroll_top = use_signal(|| 0.0f64);
     let mut viewport_h = use_signal(|| 400.0f64);
+    let mut query = use_signal(String::new);
 
-    let visible = use_memo(move || compute_visible(&lines.read(), &collapsed.read()));
+    let visible =
+        use_memo(move || compute_visible(&lines.read(), &collapsed.read(), &query.read()));
+    let match_count = use_memo(move || {
+        let q = query.read();
+        if q.is_empty() {
+            return 0usize;
+        }
+        let needle = q.to_lowercase();
+        lines
+            .read()
+            .iter()
+            .filter(|l| line_matches(l, &needle))
+            .count()
+    });
 
-    rsx! {
+    rsx! { div { class: "json-tree-wrap",
+        div { class: "json-search",
+            input {
+                class: "json-search-input",
+                placeholder: "search response…",
+                value: "{query}",
+                oninput: move |e| { query.set(e.value()); scroll_top.set(0.0); },
+                onkeydown: move |e| {
+                    if e.key() == Key::Escape { query.set(String::new()); }
+                },
+            }
+            if !query.read().is_empty() {
+                span { class: "muted small", "{match_count} matches" }
+                button {
+                    class: "btn small ghost",
+                    onclick: move |_| query.set(String::new()),
+                    "clear"
+                }
+            }
+        }
         div {
             class: "json-viewport",
             onmounted: move |m| {
@@ -2185,5 +2302,5 @@ fn JsonTree(text: String) -> Element {
                 }
             }
         }
-    }
+    }}
 }

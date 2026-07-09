@@ -264,6 +264,23 @@ pub async fn duplicate_request(request_id: &str) -> Result<String, String> {
 pub async fn delete_request(req: &Request) -> Result<(), String> {
     call_unit("delete_request", RequestArg { req }).await
 }
+#[derive(Serialize)]
+struct RenameRequestArgs<'a> {
+    #[serde(rename = "requestId")]
+    request_id: &'a str,
+    #[serde(rename = "newName")]
+    new_name: &'a str,
+}
+pub async fn rename_request(request_id: &str, new_name: &str) -> Result<String, String> {
+    call(
+        "rename_request",
+        RenameRequestArgs {
+            request_id,
+            new_name,
+        },
+    )
+    .await
+}
 pub async fn to_curl(request_id: &str, env_name: Option<&str>) -> Result<String, String> {
     call(
         "to_curl",

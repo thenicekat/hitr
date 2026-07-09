@@ -288,6 +288,54 @@ fn create_request(
 }
 
 #[tauri::command]
+fn rename_request(
+    state: State<AppState>,
+    request_id: String,
+    new_name: String,
+) -> Result<String, String> {
+    if new_name.trim().is_empty() {
+        return Err("new name is empty".into());
+    }
+    if new_name.contains('/') || new_name.contains('\\') {
+        return Err("name cannot contain slashes".into());
+    }
+    let old_req = {
+        let coll = state.collection.lock().unwrap();
+        let c = coll
+            .as_ref()
+            .ok_or_else(|| "collection not loaded".to_string())?;
+        c.requests
+            .iter()
+            .find(|r| r.id == request_id)
+            .cloned()
+            .ok_or_else(|| format!("request not found: {}", request_id))?
+    };
+    let old_path = std::path::PathBuf::from(&old_req.path);
+    let dir = old_path
+        .parent()
+        .ok_or_else(|| "no parent dir".to_string())?;
+    let new_path = dir.join(format!("{}.yml", new_name));
+
+    let same_file = std::fs::canonicalize(&old_path)
+        .ok()
+        .zip(std::fs::canonicalize(&new_path).ok())
+        .map(|(a, b)| a == b)
+        .unwrap_or(false);
+    if new_path.exists() && !same_file {
+        return Err(format!("already exists: {}", new_path.display()));
+    }
+
+    let mut updated = old_req.clone();
+    updated.info.name = new_name.clone();
+    updated.path = new_path.to_string_lossy().to_string();
+    loader::write_request(&updated)?;
+    if !same_file {
+        std::fs::remove_file(&old_path).map_err(|e| e.to_string())?;
+    }
+    Ok(new_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
 fn delete_request(req: Request) -> Result<(), String> {
     loader::delete_request_file(&req)
 }
@@ -555,6 +603,7 @@ pub fn run() {
             save_request,
             create_request,
             delete_request,
+            rename_request,
             parse_curl,
             import_curl,
             preview_openapi,
