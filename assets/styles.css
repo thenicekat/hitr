@@ -110,22 +110,37 @@ body { overflow: hidden; }
 .row-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-meta { color: var(--fg-mute); font-size: 11px; font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
 
+/* Direction A: dot + text — no border, color dot left of monospace verb */
 .method {
-  display: inline-block;
-  min-width: 48px;
-  text-align: center;
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 10px;
-  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-family: ui-monospace, monospace;
-  border: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border: none;
+  background: none;
+  white-space: nowrap;
 }
-.method-get { color: var(--get); border-color: var(--get); }
-.method-post { color: var(--post); border-color: var(--post); }
-.method-put { color: var(--put); border-color: var(--put); }
-.method-patch { color: var(--patch); border-color: var(--patch); }
-.method-delete { color: var(--delete); border-color: var(--delete); }
+.method::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.method-get { color: var(--get); }
+.method-get::before { background: var(--get); }
+.method-post { color: var(--post); }
+.method-post::before { background: var(--post); }
+.method-put { color: var(--put); }
+.method-put::before { background: var(--put); }
+.method-patch { color: var(--patch); }
+.method-patch::before { background: var(--patch); }
+.method-delete { color: var(--delete); }
+.method-delete::before { background: var(--delete); }
 
 
 .search {
@@ -153,6 +168,7 @@ body { overflow: hidden; }
 }
 .btn:hover { border-color: var(--accent); }
 .btn.small { padding: 2px 8px; font-size: 11px; }
+/* Direction C icon buttons: ghost, no border, muted → bright on hover */
 .btn.icon {
   padding: 0;
   width: 26px;
@@ -163,9 +179,13 @@ body { overflow: hidden; }
   font-size: 13px;
   line-height: 1;
   font-family: -apple-system, "Apple Color Emoji", ui-monospace, monospace;
+  background: transparent;
+  border: none;
+  color: var(--fg-mute);
 }
-.btn.icon.danger { color: var(--danger); }
-.btn.icon.danger:hover { background: var(--danger); color: var(--bg); border-color: var(--danger); }
+.btn.icon:hover { background: rgba(238,232,213,0.07); color: var(--fg); border: none; }
+.btn.icon.danger { color: var(--fg-mute); }
+.btn.icon.danger:hover { background: rgba(220,50,47,0.12); color: var(--danger); border: none; }
 .btn.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
 .btn.primary:hover { background: var(--accent2); border-color: var(--accent2); }
 .btn.danger { color: var(--danger); border-color: var(--danger); }
@@ -260,16 +280,16 @@ body { overflow: hidden; }
   border-bottom: 1px solid var(--border);
 }
 .method-select {
-  padding: 4px 6px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  padding: 4px 8px;
+  background: transparent;
+  border: none;
   font-family: ui-monospace, monospace;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   color: var(--fg);
   cursor: pointer;
 }
+.method-select:focus { outline: none; }
 .method-select.method-get { color: var(--get); }
 .method-select.method-post { color: var(--post); }
 .method-select.method-put { color: var(--put); }
