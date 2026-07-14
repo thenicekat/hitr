@@ -1,23 +1,23 @@
 :root {
-  --bg: #0f1115;
-  --bg2: #161923;
-  --bg3: #1e2130;
-  --border: #2a2e3d;
-  --fg: #d7dae0;
-  --fg-dim: #8a8f9c;
-  --fg-mute: #565b6b;
-  --accent: #7aa2f7;
-  --accent2: #bb9af7;
-  --danger: #f7768e;
-  --ok: #9ece6a;
-  --warn: #e0af68;
-  --err: #f7768e;
+  --bg: #002b36;
+  --bg2: #073642;
+  --bg3: #0f4a56;
+  --border: #114554;
+  --fg: #eee8d5;
+  --fg-dim: #93a1a1;
+  --fg-mute: #586e75;
+  --accent: #268bd2;
+  --accent2: #d33682;
+  --danger: #dc322f;
+  --ok: #859900;
+  --warn: #b58900;
+  --err: #dc322f;
 
-  --get: #9ece6a;
-  --post: #7aa2f7;
-  --put: #e0af68;
-  --patch: #bb9af7;
-  --delete: #f7768e;
+  --get: #859900;
+  --post: #268bd2;
+  --put: #b58900;
+  --patch: #d33682;
+  --delete: #dc322f;
 
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, Avenir, sans-serif;
   font-size: 13px;
@@ -127,13 +127,6 @@ body { overflow: hidden; }
 .method-patch { color: var(--patch); border-color: var(--patch); }
 .method-delete { color: var(--delete); border-color: var(--delete); }
 
-.env-actions {
-  display: flex;
-  gap: 4px;
-  padding: 8px;
-  border-top: 1px solid var(--border);
-  background: var(--bg2);
-}
 
 .search {
   flex: 1;

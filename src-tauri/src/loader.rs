@@ -35,6 +35,30 @@ fn elide_examples(s: &str) -> String {
     out
 }
 
+/// Strip query-string params from the URL that are already present in
+/// `http.params`. Bruno stores the same key in both places; the frontend
+/// tabs show duplicates. Called at parse time so no yml is written.
+fn dedup_url_params(req: &mut Request) {
+    let url = &req.http.url;
+    let Some(q) = url.find('?') else { return };
+    let base = &url[..q];
+    let query = &url[q + 1..];
+    let existing: std::collections::HashSet<&str> =
+        req.http.params.iter().map(|p| p.name.as_str()).collect();
+    let deduped: Vec<&str> = query
+        .split('&')
+        .filter(|pair| {
+            let key = pair.split('=').next().unwrap_or("");
+            !existing.contains(key)
+        })
+        .collect();
+    if deduped.is_empty() {
+        req.http.url = base.to_string();
+    } else {
+        req.http.url = format!("{}?{}", base, deduped.join("&"));
+    }
+}
+
 /// Recursively walks `root`, parses every `*.yml` that looks like a Bruno
 /// request or an environment, and returns a fully-populated `Collection`.
 ///
@@ -115,6 +139,7 @@ pub fn load_collection(root: &Path) -> Result<Collection, String> {
             .to_string_lossy()
             .to_string();
         req.id = req.rel_path.clone();
+        dedup_url_params(&mut req);
         c.requests.push(req);
     }
 

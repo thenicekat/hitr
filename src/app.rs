@@ -479,6 +479,29 @@ pub fn App() -> Element {
                 div { class: "pane envs",
                     div { class: "pane-hdr",
                         span { "envs" }
+                        if let Some(env) = selected_env_obj.read().as_ref() {
+                            button { class: "btn icon", title: "edit env",
+                                onclick: move |_| modal.set(Modal::EditEnv), "✎" }
+                            {
+                                let e = env.clone();
+                                rsx! {
+                                    button { class: "btn icon danger", title: "delete env",
+                                        onclick: move |_| {
+                                            let e = e.clone();
+                                            spawn(async move {
+                                                if let Err(err) = api::delete_env(&e).await {
+                                                    error.set(Some(format!("delete_env: {}", err)));
+                                                    return;
+                                                }
+                                                selected_env.set(None);
+                                                load_all.call(());
+                                            });
+                                        },
+                                        "🗑"
+                                    }
+                                }
+                            }
+                        }
                         button { class: "btn icon", title: "new env", onclick: move |_| modal.set(Modal::NewEnv), "+" }
                     }
                     div { class: "list",
@@ -494,35 +517,6 @@ pub fn App() -> Element {
                                         onclick: move |_| selected_env.set(Some(n2.clone())),
                                         span { class: "row-title", "{name}" }
                                         span { class: "row-meta", "{env.variables.len()} vars" }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if let Some(env) = selected_env_obj.read().as_ref() {
-                        div { class: "env-actions",
-                            button { class: "btn icon",
-                                title: "edit env",
-                                onclick: move |_| modal.set(Modal::EditEnv),
-                                "✎"
-                            }
-                            {
-                                let e = env.clone();
-                                rsx! {
-                                    button { class: "btn icon danger",
-                                        title: "delete env",
-                                        onclick: move |_| {
-                                            let e = e.clone();
-                                            spawn(async move {
-                                                if let Err(err) = api::delete_env(&e).await {
-                                                    error.set(Some(format!("delete_env: {}", err)));
-                                                    return;
-                                                }
-                                                selected_env.set(None);
-                                                load_all.call(());
-                                            });
-                                        },
-                                        "🗑"
                                     }
                                 }
                             }
@@ -1387,9 +1381,16 @@ fn RequestEditor(
     let mut url = use_signal(|| init_url);
     let headers = use_signal(|| req.http.headers.clone());
     let mut params = use_signal(|| {
-        // Merge params from URL query into existing params tab. URL-derived
-        // rows come first (enabled) so they show up front.
-        let mut merged = init_extra_params;
+        // Merge params from URL query into existing params tab.
+        // URL-derived rows come first; skip any whose key already appears
+        // in req.http.params to avoid duplicates (Bruno stores params in
+        // both the url string and the params[] array for the same key).
+        let existing_keys: std::collections::HashSet<&str> =
+            req.http.params.iter().map(|p| p.name.as_str()).collect();
+        let mut merged: Vec<KV> = init_extra_params
+            .into_iter()
+            .filter(|p| !existing_keys.contains(p.name.as_str()))
+            .collect();
         for p in &req.http.params {
             merged.push(p.clone());
         }
@@ -1529,7 +1530,11 @@ fn RequestEditor(
                         if v.contains('?') {
                             let (base, extras) = split_url_and_params(&v);
                             let mut cur = params.read().clone();
-                            for e in extras { cur.push(e); }
+                            let existing: std::collections::HashSet<String> =
+                                cur.iter().map(|p| p.name.clone()).collect();
+                            for e in extras {
+                                if !existing.contains(&e.name) { cur.push(e); }
+                            }
                             params.set(cur);
                             url.set(base);
                         } else {
