@@ -209,7 +209,7 @@ body { overflow: hidden; }
 .headers summary { cursor: pointer; padding: 4px 0; color: var(--fg-dim); user-select: none; }
 .hdr { display: flex; gap: 12px; padding: 2px 0; font-size: 11px; }
 .hdr-k { color: var(--accent); min-width: 180px; }
-.hdr-v { color: var(--fg); word-break: break-all; }
+.hdr-v { color: var(--fg); word-break: break-word; overflow-wrap: anywhere; }
 .body-json { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; background: var(--bg2); padding: 12px; border-radius: 4px; margin: 0; user-select: text; }
 
 .muted { color: var(--fg-mute); }
@@ -225,6 +225,7 @@ body { overflow: hidden; }
   align-items: center;
   justify-content: center;
   z-index: 100;
+  overflow: hidden;
 }
 .modal {
   background: var(--bg2);
@@ -232,10 +233,13 @@ body { overflow: hidden; }
   border-radius: 8px;
   padding: 20px;
   width: min(640px, 92vw);
+  max-width: min(640px, 92vw);
   max-height: 85vh;
   overflow-y: auto;
+  overflow-x: hidden;
+  box-sizing: border-box;
 }
-.modal.wide { width: min(760px, 92vw); }
+.modal.wide { width: min(760px, 92vw); max-width: min(760px, 92vw); }
 .modal h3 { margin: 0 0 16px 0; }
 .modal label { display: block; margin: 12px 0 4px; font-size: 11px; text-transform: uppercase; color: var(--fg-dim); letter-spacing: 0.5px; }
 .modal input, .modal select {

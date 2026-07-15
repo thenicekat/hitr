@@ -95,6 +95,79 @@ fn resolve_schema<'a>(spec: &'a OpenAPI, r: &'a ReferenceOr<Schema>) -> Option<&
     }
 }
 
+fn resolve_schema_boxed<'a>(
+    spec: &'a OpenAPI,
+    r: &'a ReferenceOr<Box<Schema>>,
+) -> Option<&'a Schema> {
+    match r {
+        ReferenceOr::Item(boxed) => Some(boxed.as_ref()),
+        ReferenceOr::Reference { reference } => {
+            let name = reference.rsplit('/').next()?;
+            spec.components
+                .as_ref()?
+                .schemas
+                .get(name)
+                .and_then(|r| match r {
+                    ReferenceOr::Item(s) => Some(s),
+                    _ => None,
+                })
+        }
+    }
+}
+
+/// Build a skeleton JSON value from a schema. Bounded by `depth` to avoid
+/// infinite recursion on circular refs (e.g. self-referential tree nodes).
+fn schema_skeleton(spec: &OpenAPI, schema: &Schema, depth: u8) -> serde_json::Value {
+    use openapiv3::{SchemaKind, Type as OAType};
+    if depth == 0 {
+        return serde_json::Value::Null;
+    }
+    match &schema.schema_kind {
+        SchemaKind::Type(OAType::Object(obj)) => {
+            let mut map = serde_json::Map::new();
+            for (k, v) in &obj.properties {
+                let child = resolve_schema_boxed(spec, v)
+                    .map(|s| schema_skeleton(spec, s, depth - 1))
+                    .unwrap_or(serde_json::Value::Null);
+                map.insert(k.clone(), child);
+            }
+            serde_json::Value::Object(map)
+        }
+        SchemaKind::Type(OAType::Array(arr)) => {
+            let item_val = arr
+                .items
+                .as_ref()
+                .and_then(|r| resolve_schema_boxed(spec, r))
+                .map(|s| schema_skeleton(spec, s, depth - 1))
+                .unwrap_or(serde_json::Value::Null);
+            serde_json::Value::Array(vec![item_val])
+        }
+        SchemaKind::Type(OAType::String(_)) => serde_json::Value::String(String::new()),
+        SchemaKind::Type(OAType::Integer(_)) => serde_json::json!(0),
+        SchemaKind::Type(OAType::Number(_)) => serde_json::json!(0.0),
+        SchemaKind::Type(OAType::Boolean { .. }) => serde_json::Value::Bool(false),
+        SchemaKind::AllOf { all_of } => {
+            let mut map = serde_json::Map::new();
+            for r in all_of {
+                if let Some(s) = resolve_schema(spec, r) {
+                    if let serde_json::Value::Object(m) = schema_skeleton(spec, s, depth - 1) {
+                        map.extend(m);
+                    }
+                }
+            }
+            serde_json::Value::Object(map)
+        }
+        SchemaKind::OneOf { one_of } | SchemaKind::AnyOf { any_of: one_of } => {
+            one_of
+                .first()
+                .and_then(|r| resolve_schema(spec, r))
+                .map(|s| schema_skeleton(spec, s, depth - 1))
+                .unwrap_or(serde_json::Value::Null)
+        }
+        _ => serde_json::Value::Null,
+    }
+}
+
 fn extract_body(op: &Operation, spec: &OpenAPI) -> Body {
     let Some(rb) = op.request_body.as_ref() else {
         return Body::default();
@@ -130,16 +203,29 @@ fn extract_body(op: &Operation, spec: &OpenAPI) -> Body {
             }
         }
     }
-    // schema present but no example — mark type=json, empty body
+    // schema present but no example — generate skeleton
     if let Some(schema_ref) = &content.schema {
-        if resolve_schema(spec, schema_ref).is_some() {
-            return Body {
-                r#type: Some("json".into()),
-                data: None,
-                json: None,
-                text: None,
-            };
+        if let Some(schema) = resolve_schema(spec, schema_ref) {
+            let skeleton = schema_skeleton(spec, schema, 4);
+            // only use if it produced something non-null
+            if skeleton != serde_json::Value::Null {
+                if let Ok(pretty) = serde_json::to_string_pretty(&skeleton) {
+                    return Body {
+                        r#type: Some("json".into()),
+                        data: Some(pretty),
+                        json: None,
+                        text: None,
+                    };
+                }
+            }
         }
+        // schema exists but skeleton failed (e.g. unresolvable ref) — still mark json
+        return Body {
+            r#type: Some("json".into()),
+            data: None,
+            json: None,
+            text: None,
+        };
     }
     Body::default()
 }

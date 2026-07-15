@@ -1315,7 +1315,7 @@ fn ImportOpenApiModal(on_close: EventHandler<()>) -> Element {
                     placeholder: "openapi"
                 }
 
-                div { style: "display: flex; align-items: center; gap: 8px; margin-top: 12px;",
+                div { style: "display: flex; align-items: center; gap: 8px; margin-top: 12px; min-width: 0; flex-wrap: wrap;",
                     input {
                         r#type: "checkbox",
                         checked: *create_env.read(),
