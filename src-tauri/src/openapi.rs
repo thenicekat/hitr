@@ -157,13 +157,11 @@ fn schema_skeleton(spec: &OpenAPI, schema: &Schema, depth: u8) -> serde_json::Va
             }
             serde_json::Value::Object(map)
         }
-        SchemaKind::OneOf { one_of } | SchemaKind::AnyOf { any_of: one_of } => {
-            one_of
-                .first()
-                .and_then(|r| resolve_schema(spec, r))
-                .map(|s| schema_skeleton(spec, s, depth - 1))
-                .unwrap_or(serde_json::Value::Null)
-        }
+        SchemaKind::OneOf { one_of } | SchemaKind::AnyOf { any_of: one_of } => one_of
+            .first()
+            .and_then(|r| resolve_schema(spec, r))
+            .map(|s| schema_skeleton(spec, s, depth - 1))
+            .unwrap_or(serde_json::Value::Null),
         _ => serde_json::Value::Null,
     }
 }
