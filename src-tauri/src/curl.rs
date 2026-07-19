@@ -202,6 +202,7 @@ pub fn parse_curl(input: &str) -> Result<Request, String> {
             params: Vec::new(),
             body,
             auth: None,
+            auth_config: None,
         },
         path: String::new(),
         rel_path: String::new(),

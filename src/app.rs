@@ -1365,6 +1365,7 @@ enum EditorTab {
     Params,
     Headers,
     Body,
+    Auth,
 }
 
 #[component]
@@ -1396,6 +1397,7 @@ fn RequestEditor(
         }
         merged
     });
+    let mut auth_config = use_signal(|| req.http.auth_config.clone().unwrap_or_default());
     let mut body_type = use_signal(|| req.http.body.kind.clone().unwrap_or_default());
     let mut body_text = use_signal(|| {
         // Bruno stores body under `data`; older hitr saves used `json`/`text`.
@@ -1461,6 +1463,12 @@ fn RequestEditor(
                 } else {
                     None
                 },
+            };
+            let ac = auth_config.peek().clone();
+            updated.http.auth_config = if ac.mode.is_empty() || ac.mode == "inherit" {
+                None
+            } else {
+                Some(ac)
             };
             saving.set(true);
             match api::save_request(&updated).await {
@@ -1625,6 +1633,11 @@ fn RequestEditor(
                             onclick: move |_| tab.set(EditorTab::Body),
                             "body"
                         }
+                        button {
+                            class: if cur == EditorTab::Auth { "tab active" } else { "tab" },
+                            onclick: move |_| tab.set(EditorTab::Auth),
+                            "auth"
+                        }
                     }
                 }
             }
@@ -1632,6 +1645,7 @@ fn RequestEditor(
                 match *tab.read() {
                     EditorTab::Params => rsx! { KVEditor { items: params, on_change: move |_| bump() } },
                     EditorTab::Headers => rsx! { KVEditor { items: headers, on_change: move |_| bump() } },
+                    EditorTab::Auth => rsx! { AuthEditor { config: auth_config, on_change: move |_| bump() } },
                     EditorTab::Body => rsx! {
                         div { class: "body-editor",
                             div { class: "body-type-row",
@@ -1783,6 +1797,140 @@ fn KVEditor(items: Signal<Vec<KV>>, on_change: EventHandler<()>) -> Element {
                     on_change.call(());
                 },
                 "+ add"
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Auth editor
+
+#[component]
+fn AuthEditor(config: Signal<AuthConfig>, on_change: EventHandler<()>) -> Element {
+    let mode = config.read().mode.clone();
+    let mode_display = if mode.is_empty() {
+        "inherit".to_string()
+    } else {
+        mode.clone()
+    };
+    rsx! {
+        div { class: "auth-editor",
+            div { class: "auth-mode-row",
+                span { class: "muted small", "type" }
+                for m in ["inherit", "bearer", "api_key", "basic", "none"].iter() {
+                    button {
+                        class: if mode_display.as_str() == *m { "tab active" } else { "tab" },
+                        onclick: move |_| {
+                            let mut c = config.read().clone();
+                            c.mode = if *m == "inherit" { String::new() } else { m.to_string() };
+                            config.set(c);
+                            on_change.call(());
+                        },
+                        "{m}"
+                    }
+                }
+            }
+            match mode_display.as_str() {
+                "bearer" => rsx! {
+                    div { class: "auth-field",
+                        label { class: "auth-label", "token" }
+                        input {
+                            class: "auth-input",
+                            r#type: "password",
+                            placeholder: "{{bearerToken}} or literal",
+                            value: "{config.read().token}",
+                            oninput: move |e| {
+                                let mut c = config.read().clone();
+                                c.token = e.value();
+                                config.set(c);
+                                on_change.call(());
+                            },
+                        }
+                        span { class: "auth-hint muted small", "sent as: Authorization: Bearer <token>" }
+                    }
+                },
+                "api_key" => rsx! {
+                    div { class: "auth-field",
+                        label { class: "auth-label", "key name" }
+                        input {
+                            class: "auth-input",
+                            placeholder: "X-API-Key",
+                            value: "{config.read().key}",
+                            oninput: move |e| {
+                                let mut c = config.read().clone();
+                                c.key = e.value();
+                                config.set(c);
+                                on_change.call(());
+                            },
+                        }
+                        label { class: "auth-label", "value" }
+                        input {
+                            class: "auth-input",
+                            r#type: "password",
+                            placeholder: "{{apiKey}} or literal",
+                            value: "{config.read().token}",
+                            oninput: move |e| {
+                                let mut c = config.read().clone();
+                                c.token = e.value();
+                                config.set(c);
+                                on_change.call(());
+                            },
+                        }
+                        label { class: "auth-label", "add to" }
+                        div { class: "auth-mode-row",
+                            for loc in ["header", "query"].iter() {
+                                button {
+                                    class: if config.read().r#in.as_str() == *loc || (loc == &"header" && config.read().r#in.is_empty()) { "tab active" } else { "tab" },
+                                    onclick: move |_| {
+                                        let mut c = config.read().clone();
+                                        c.r#in = loc.to_string();
+                                        config.set(c);
+                                        on_change.call(());
+                                    },
+                                    "{loc}"
+                                }
+                            }
+                        }
+                    }
+                },
+                "basic" => rsx! {
+                    div { class: "auth-field",
+                        label { class: "auth-label", "username" }
+                        input {
+                            class: "auth-input",
+                            placeholder: "{{username}} or literal",
+                            value: "{config.read().key}",
+                            oninput: move |e| {
+                                let mut c = config.read().clone();
+                                c.key = e.value();
+                                config.set(c);
+                                on_change.call(());
+                            },
+                        }
+                        label { class: "auth-label", "password" }
+                        input {
+                            class: "auth-input",
+                            r#type: "password",
+                            placeholder: "{{password}} or literal",
+                            value: "{config.read().token}",
+                            oninput: move |e| {
+                                let mut c = config.read().clone();
+                                c.token = e.value();
+                                config.set(c);
+                                on_change.call(());
+                            },
+                        }
+                        span { class: "auth-hint muted small", "sent as: Authorization: Basic <base64>" }
+                    }
+                },
+                "none" => rsx! {
+                    span { class: "muted small", style: "padding: 8px 0; display:block;", "no auth sent" }
+                },
+                _ => rsx! {
+                    span { class: "muted small", style: "padding: 8px 0; display:block;",
+                        "uses env bearerToken if present, otherwise no auth"
+                    }
+                },
             }
         }
     }

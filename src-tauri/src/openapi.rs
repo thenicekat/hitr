@@ -433,6 +433,7 @@ pub fn import(
                 params,
                 body,
                 auth: Some("inherit".into()),
+                auth_config: None,
             },
             path: file.to_string_lossy().to_string(),
             rel_path: String::new(),

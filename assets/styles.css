@@ -478,6 +478,23 @@ body { overflow: hidden; }
 }
 .json-search-input:focus { outline: none; border-color: var(--accent); }
 
+/* auth editor */
+.auth-editor { display: flex; flex-direction: column; gap: 10px; }
+.auth-mode-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.auth-field { display: flex; flex-direction: column; gap: 6px; }
+.auth-label { font-size: 11px; text-transform: uppercase; color: var(--fg-dim); letter-spacing: 0.5px; }
+.auth-input {
+  padding: 5px 8px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+.auth-input:focus { outline: none; border-color: var(--accent); }
+.auth-hint { padding: 2px 0; }
+
 .name-input {
   flex: 1;
   padding: 4px 8px;

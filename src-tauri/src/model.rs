@@ -36,6 +36,22 @@ pub struct Body {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AuthConfig {
+    /// "none" | "inherit" | "bearer" | "api_key" | "basic"
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub mode: String,
+    /// bearer token or basic password; may contain {{vars}}
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub token: String,
+    /// api_key header/query name (e.g. "X-API-Key") or basic username
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub key: String,
+    /// "header" | "query" — where to put the api_key
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub r#in: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HttpSpec {
     pub method: String,
     pub url: String,
@@ -45,8 +61,11 @@ pub struct HttpSpec {
     pub params: Vec<KV>,
     #[serde(default)]
     pub body: Body,
+    /// Legacy Bruno string field — kept for round-trip compat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_config: Option<AuthConfig>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

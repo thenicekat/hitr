@@ -195,6 +195,25 @@ pub async fn fire(
         }
         parsed.query_pairs_mut().append_pair(&k, &v);
     }
+    // api_key-in-query must be appended before parsed is consumed by request()
+    let mode = req
+        .http
+        .auth_config
+        .as_ref()
+        .map(|a| a.mode.as_str())
+        .unwrap_or("inherit");
+    if mode == "api_key" {
+        if let Some(ac) = &req.http.auth_config {
+            if ac.r#in == "query" || ac.r#in.is_empty() {
+                let (val, _) = substitute(&ac.token, &vars);
+                let key = ac.key.as_str();
+                if !key.is_empty() && !val.is_empty() {
+                    parsed.query_pairs_mut().append_pair(key, &val);
+                }
+            }
+        }
+    }
+
     let mut rb = client.request(m, parsed);
 
     for h in &req.http.headers {
@@ -207,14 +226,56 @@ pub async fn fire(
         }
         rb = rb.header(&h.name, val);
     }
-    if let Some(bearer) = vars.get("bearerToken") {
-        if !req
-            .http
-            .headers
-            .iter()
-            .any(|h| h.name.eq_ignore_ascii_case("authorization"))
-        {
-            rb = rb.header("Authorization", format!("Bearer {}", bearer));
+    // Apply auth. Explicit auth_config wins; fall back to legacy env bearerToken.
+    let has_auth_header = req
+        .http
+        .headers
+        .iter()
+        .any(|h| h.name.eq_ignore_ascii_case("authorization"));
+    match mode {
+        "none" => {}
+        "bearer" => {
+            if !has_auth_header {
+                if let Some(ac) = &req.http.auth_config {
+                    let (tok, _) = substitute(&ac.token, &vars);
+                    if !tok.is_empty() {
+                        rb = rb.header("Authorization", format!("Bearer {}", tok));
+                    }
+                }
+            }
+        }
+        "api_key" => {
+            if let Some(ac) = &req.http.auth_config {
+                // header placement only — query was handled above
+                if ac.r#in == "header" {
+                    let (val, _) = substitute(&ac.token, &vars);
+                    let key = ac.key.as_str();
+                    if !key.is_empty() && !val.is_empty() {
+                        rb = rb.header(key, val);
+                    }
+                }
+            }
+        }
+        "basic" => {
+            if !has_auth_header {
+                if let Some(ac) = &req.http.auth_config {
+                    let (user, _) = substitute(&ac.key, &vars);
+                    let (pass, _) = substitute(&ac.token, &vars);
+                    if !user.is_empty() {
+                        let pass_opt: Option<&str> =
+                            if pass.is_empty() { None } else { Some(&pass) };
+                        rb = rb.basic_auth(&user, pass_opt);
+                    }
+                }
+            }
+        }
+        // "inherit" or anything else — fall back to env bearerToken
+        _ => {
+            if !has_auth_header {
+                if let Some(bearer) = vars.get("bearerToken") {
+                    rb = rb.header("Authorization", format!("Bearer {}", bearer));
+                }
+            }
         }
     }
 

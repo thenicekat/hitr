@@ -33,6 +33,16 @@ pub struct Body {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
+pub struct AuthConfig {
+    pub mode: String,
+    pub token: String,
+    pub key: String,
+    #[serde(rename = "in")]
+    pub r#in: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct HttpSpec {
     pub method: String,
     pub url: String,
@@ -40,6 +50,7 @@ pub struct HttpSpec {
     pub params: Vec<KV>,
     pub body: Body,
     pub auth: Option<String>,
+    pub auth_config: Option<AuthConfig>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
