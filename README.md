@@ -1,6 +1,6 @@
 # hitr
 
-Fast, native REST client with plain-text YAML collections. Rust + Tauri + Dioxus. No Electron, no Node runtime, no cloud account.
+Hitr is a native REST API client for macOS with plain-text YAML collections, cURL and OpenAPI import, and a local MCP server for agents. Built with Rust, Tauri, and Dioxus.
 
 Built because heavyweight Electron clients are slow and cloud-first tools want your data on their servers. This does one thing: read a collection off disk, edit envs, fire requests. Nothing else.
 
@@ -76,6 +76,51 @@ cargo tauri build            # release bundle in src-tauri/target/release/bundle
 ```
 
 Point hitr at your collection root: click `root: /...` in the topbar, paste a path, Enter.
+
+## MCP for agents
+
+Hitr exposes two tools through the [MCP stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports):
+
+| Tool | What it does |
+| --- | --- |
+| `search_requests` | Finds approved saved requests by name, ID, or HTTP method and lists their approved environments. An empty query lists the first 25 entries. |
+| `send_request` | Runs a saved request by its exact ID and environment. Use `null` when the request was approved without an environment. |
+
+1. Save the requests you want to expose in your Hitr collection. Use vault variables for credentials, such as an environment's secret `bearerToken`.
+2. Create `~/Library/Application Support/hitr/mcp.json` with the request and environment pairs you want to allow. The example uses `widgets/list.yml`, a request path relative to the collection root. The origin must match the resolved HTTPS destination of that request.
+
+   ```json
+   {
+     "grants": [
+       {
+         "request_id": "widgets/list.yml",
+         "environment": "sandbox",
+         "origin": "https://api.example.com",
+         "return_body": true
+       }
+     ]
+   }
+   ```
+
+3. Restart Hitr. It reads the grants and snapshots the approved saved requests and environment settings at startup. Unlock the vault in Hitr when sending a request that needs it.
+4. Configure your MCP client to run the installed Hitr executable with the `mcp` argument. For clients that use an `mcpServers` JSON setting:
+
+   ```json
+   {
+     "mcpServers": {
+       "hitr": {
+         "command": "/Applications/hitr.app/Contents/MacOS/hitr",
+         "args": ["mcp"]
+       }
+     }
+   }
+   ```
+
+The client connects to the running desktop app through a private Unix socket. Hitr keeps the vault password out of MCP and attaches credentials inside the desktop process. Agents cannot supply a URL, method, headers, or body. Hitr checks the approved origin before sending and disables redirects for MCP calls.
+
+Results include the HTTP status and latency. Response bodies are off by default. Enable `return_body` only for APIs whose content is appropriate to share with the agent. Hitr suppresses oversized, non-UTF-8, and known credential echoes, but a remote API can return other sensitive data or transform a credential in ways Hitr cannot detect. Approve only requests the agent may execute. Locking the vault stops new calls that need it. To revoke an approval, edit the grant file and restart the app.
+
+The socket limits access to the local user account. This does not isolate an agent that can already run arbitrary commands or edit files as that user.
 
 ## Layout
 
