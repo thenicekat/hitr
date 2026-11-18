@@ -204,6 +204,7 @@ pub fn parse_curl(input: &str) -> Result<Request, String> {
             auth: None,
             auth_config: None,
         },
+        mcp_schema: None,
         path: String::new(),
         rel_path: String::new(),
         id: String::new(),

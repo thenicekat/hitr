@@ -144,6 +144,7 @@ pub fn load_collection(root: &Path) -> Result<Collection, String> {
     }
 
     c.requests.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    crate::openapi::recover_mcp_schemas(root, &mut c.requests);
     Ok(c)
 }
 
@@ -199,6 +200,7 @@ pub fn create_request_file(
             url: url.to_string(),
             ..Default::default()
         },
+        mcp_schema: None,
         path: file.to_string_lossy().to_string(),
         rel_path: String::new(),
         id: String::new(),

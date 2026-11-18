@@ -67,6 +67,7 @@ pub struct Info {
 pub struct Request {
     pub info: Info,
     pub http: HttpSpec,
+    pub mcp_schema: Option<serde_json::Value>,
     pub path: String,
     pub rel_path: String,
     pub id: String,

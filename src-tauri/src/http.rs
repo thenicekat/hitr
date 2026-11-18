@@ -193,8 +193,7 @@ pub enum RequestMode {
     Mcp,
 }
 
-/// MCP uses the saved request and selected environment as its only inputs.
-/// An environment base URL also restricts where its credentials can be sent.
+/// In MCP mode the environment base URL restricts where credentials can be sent.
 pub fn prepare(
     client: &reqwest::Client,
     req: &Request,
@@ -376,14 +375,7 @@ pub fn prepare(
         // type. Some newer variants use `body.json` / `body.text`. Take
         // whichever field is populated.
         let raw = match body_type {
-            "json" => req
-                .http
-                .body
-                .json
-                .clone()
-                .filter(|s| !s.is_empty())
-                .or_else(|| req.http.body.data.clone())
-                .unwrap_or_default(),
+            "json" => req.http.body.json_template().unwrap_or_default().to_owned(),
             "text" => req
                 .http
                 .body

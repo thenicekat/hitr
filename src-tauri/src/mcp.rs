@@ -1,6 +1,6 @@
 //! Local stdio MCP bridge. The desktop process owns the vault and HTTP client.
 
-use crate::{http, model, vault::VaultState, AppState};
+use crate::{mcp_inputs, model, vault::VaultState, AppState};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock};
 use rmcp::{schemars, tool, tool_router, ServiceExt};
@@ -113,19 +113,24 @@ struct SendRequest {
         description = "Exact environment name from search_requests, or null to send without an environment."
     )]
     environment: Option<String>,
+    #[serde(default)]
+    #[schemars(
+        description = "Optional query and JSON body values for this call. Use the request's input_schema from search_requests."
+    )]
+    inputs: mcp_inputs::Inputs,
 }
 
 #[tool_router(server_handler)]
 impl Broker {
     #[tool(
-        description = "Search saved requests and list environments in Hitr’s active collection. Requires an unlocked vault."
+        description = "Find saved requests, their input schemas, and environments in Hitr’s active collection. Requires an unlocked vault."
     )]
     fn search_requests(&self, Parameters(input): Parameters<Search>) -> CallToolResult {
         tool_result(self.search(input))
     }
 
     #[tool(
-        description = "Send a saved request with a chosen environment. Requires an unlocked vault and may change remote data."
+        description = "Send a saved request with a chosen environment and optional typed inputs from its input_schema. Requires an unlocked vault and may change remote data."
     )]
     async fn send_request(&self, Parameters(input): Parameters<SendRequest>) -> CallToolResult {
         tool_result(self.send(input).await)
@@ -173,6 +178,7 @@ impl Broker {
                     "request_id": req.id,
                     "name": req.info.name,
                     "method": req.http.method,
+                    "input_schema": mcp_inputs::describe(req),
                 })
             })
             .collect();
@@ -225,8 +231,13 @@ impl Broker {
             }
             cache.clone()
         };
-        let request = http::prepare(&self.client, &req, env.as_ref(), vault.as_ref(), http::RequestMode::Mcp)
-            .map_err(|_| "Hitr could not prepare this request. Check its HTTPS URL, environment origin and variables.")?;
+        let request = mcp_inputs::prepare(
+            &self.client,
+            req,
+            env.as_ref(),
+            vault.as_ref(),
+            input.inputs,
+        )?;
         let secrets = response_secrets(&request, vault.as_ref());
         let send = async {
             let start = Instant::now();
@@ -470,6 +481,7 @@ pub fn stdio_bridge() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http;
     use tokio::io::{AsyncBufReadExt, BufReader};
 
     fn fixture() -> Broker {
@@ -540,6 +552,7 @@ mod tests {
             json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
             json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_requests","arguments":{"query":"get widgets"}}}),
             json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"send_request","arguments":{"request_id":"widgets/list.yml","environment":"other"}}}),
+            json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"send_request","arguments":{"request_id":"widgets/list.yml","environment":"sandbox","inputs":{"query":{"limit":10}}}}}),
             json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"send_request","arguments":{"request_id":"widgets/list.yml","environment":"sandbox"}}}),
             json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"search_requests","arguments":{"query":""}}}),
             json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"search_requests","arguments":{"query":""}}}),
@@ -578,6 +591,7 @@ mod tests {
                 3 => {
                     let requests = &result["structuredContent"]["requests"];
                     assert_eq!(requests[0]["request_id"], "widgets/list.yml");
+                    assert_eq!(requests[0]["input_schema"]["additionalProperties"], false);
                     assert_eq!(result["structuredContent"]["environments"][0], "sandbox");
                     assert!(!reply.to_string().contains("api.example.test"));
                 }
@@ -592,6 +606,12 @@ mod tests {
                 7 => {
                     assert_eq!(result["isError"], true);
                     assert!(result.to_string().contains("Enable MCP"));
+                }
+                8 => {
+                    assert_eq!(result["isError"], true);
+                    assert!(result
+                        .to_string()
+                        .contains("Unknown or protected query input"));
                 }
                 _ => unreachable!(),
             }
@@ -618,6 +638,7 @@ mod tests {
         let mut send = Box::pin(broker.send(SendRequest {
             request_id: "widgets/list.yml".into(),
             environment: None,
+            inputs: mcp_inputs::Inputs::default(),
         }));
         // Hold the connection before completing TLS so access can be revoked
         // with an outbound call still pending.

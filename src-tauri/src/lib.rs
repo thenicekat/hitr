@@ -20,6 +20,7 @@ mod http;
 mod loader;
 #[cfg(unix)]
 pub mod mcp;
+mod mcp_inputs;
 mod model;
 mod openapi;
 mod updates;

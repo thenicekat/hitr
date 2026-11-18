@@ -35,6 +35,15 @@ pub struct Body {
     pub data: Option<String>,
 }
 
+impl Body {
+    pub fn json_template(&self) -> Option<&str> {
+        self.json
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .or(self.data.as_deref())
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AuthConfig {
     /// "none" | "inherit" | "bearer" | "api_key" | "basic"
@@ -82,6 +91,8 @@ pub struct Request {
     #[serde(default)]
     pub info: Info,
     pub http: HttpSpec,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_schema: Option<crate::mcp_inputs::InputSchema>,
 
     // runtime metadata — stripped before yaml write in loader
     #[serde(default, skip_serializing_if = "String::is_empty")]

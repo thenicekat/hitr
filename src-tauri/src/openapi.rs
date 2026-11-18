@@ -7,9 +7,11 @@
 //! comes from `content."application/json".example`; schema-driven body
 //! generation is intentionally out of scope.
 
+use crate::mcp_inputs::{ordinary_name, saved_url, FieldType, InputSchema, QueryField, Scalar};
 use crate::model::*;
 use openapiv3::{OpenAPI, Operation, Parameter, ReferenceOr, Schema, SchemaKind, Type};
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -417,6 +419,189 @@ fn iter_ops(spec: &OpenAPI) -> Vec<(String, String, Operation)> {
     out
 }
 
+fn input_type(spec: &OpenAPI, schema: &Schema) -> Option<FieldType> {
+    fn scalar(schema: &Schema) -> Option<Scalar> {
+        match &schema.schema_kind {
+            SchemaKind::Type(Type::String(s))
+                if !matches!(
+                    s.format,
+                    openapiv3::VariantOrUnknownOrEmpty::Item(openapiv3::StringFormat::Password)
+                ) =>
+            {
+                Some(Scalar::String)
+            }
+            SchemaKind::Type(Type::Integer(_)) => Some(Scalar::Integer),
+            SchemaKind::Type(Type::Number(_)) => Some(Scalar::Number),
+            SchemaKind::Type(Type::Boolean(_)) => Some(Scalar::Boolean),
+            _ => None,
+        }
+    }
+    if schema.schema_data.read_only {
+        return None;
+    }
+    let (scalar, array) = match &schema.schema_kind {
+        SchemaKind::Type(Type::Array(array)) => (
+            scalar(resolve_schema_boxed(spec, array.items.as_ref()?)?)?,
+            true,
+        ),
+        _ => (scalar(schema)?, false),
+    };
+    Some(FieldType { scalar, array })
+}
+
+fn body_fields(
+    spec: &OpenAPI,
+    schema: &Schema,
+    depth: usize,
+    fields: &mut BTreeMap<String, FieldType>,
+) {
+    if depth == 0 {
+        return;
+    }
+    match &schema.schema_kind {
+        SchemaKind::Type(Type::Object(object)) => {
+            for (name, field) in &object.properties {
+                if ordinary_name(name) {
+                    if let Some(kind) =
+                        resolve_schema_boxed(spec, field).and_then(|field| input_type(spec, field))
+                    {
+                        fields.insert(name.clone(), kind);
+                    }
+                }
+            }
+        }
+        SchemaKind::AllOf { all_of } => {
+            for branch in all_of
+                .iter()
+                .filter_map(|branch| resolve_schema(spec, branch))
+            {
+                body_fields(spec, branch, depth - 1, fields);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn mcp_schema(spec: &OpenAPI, method: &str, path: &str, op: &Operation) -> InputSchema {
+    use openapiv3::{ParameterSchemaOrContent, QueryStyle, SecurityScheme};
+    let api_keys: BTreeSet<_> = spec
+        .components
+        .iter()
+        .flat_map(|components| components.security_schemes.values())
+        .filter_map(|scheme| match scheme {
+            ReferenceOr::Item(SecurityScheme::APIKey { name, .. }) => {
+                Some(name.to_ascii_lowercase())
+            }
+            _ => None,
+        })
+        .collect();
+    let mut schema = InputSchema {
+        method: method.to_owned(),
+        url: build_url(path),
+        query: BTreeMap::new(),
+        omit_empty_query: BTreeSet::new(),
+        body: BTreeMap::new(),
+    };
+    for param in op.parameters.iter().filter_map(|p| resolve_param(spec, p)) {
+        let Parameter::Query {
+            parameter_data,
+            style,
+            allow_empty_value,
+            ..
+        } = param
+        else {
+            continue;
+        };
+        let data = parameter_data;
+        if !ordinary_name(&data.name) || api_keys.contains(&data.name.to_ascii_lowercase()) {
+            continue;
+        }
+        if !data.required && *allow_empty_value != Some(true) {
+            schema.omit_empty_query.insert(data.name.clone());
+        }
+        let ParameterSchemaOrContent::Schema(reference) = &data.format else {
+            continue;
+        };
+        let Some(field) = resolve_schema(spec, reference).and_then(|s| input_type(spec, s)) else {
+            continue;
+        };
+        let separator = match style {
+            QueryStyle::Form => (field.array && data.explode == Some(false)).then_some(','),
+            QueryStyle::SpaceDelimited if field.array && data.explode != Some(true) => Some(' '),
+            QueryStyle::PipeDelimited if field.array && data.explode != Some(true) => Some('|'),
+            _ => continue,
+        };
+        schema
+            .query
+            .insert(data.name.clone(), QueryField { field, separator });
+    }
+    if let Some(body) = op
+        .request_body
+        .as_ref()
+        .and_then(|body| resolve_request_body(spec, body))
+    {
+        if let Some(body_schema) = body
+            .content
+            .get("application/json")
+            .and_then(|content| content.schema.as_ref())
+            .and_then(|reference| resolve_schema(spec, reference))
+        {
+            body_fields(spec, body_schema, 8, &mut schema.body);
+            schema
+                .body
+                .retain(|name, _| !api_keys.contains(&name.to_ascii_lowercase()));
+        }
+    }
+    schema
+}
+
+/// Recover metadata for older imports without rewriting their request files.
+pub fn recover_mcp_schemas(root: &Path, requests: &mut [Request]) {
+    let mut pending: HashMap<(String, String), Vec<&mut Request>> = HashMap::new();
+    for req in requests {
+        if req
+            .mcp_schema
+            .as_ref()
+            .is_some_and(|schema| schema.matches(req))
+        {
+            continue;
+        }
+        req.mcp_schema = None;
+        if req.http.url.starts_with("{{baseUrl}}/") {
+            pending
+                .entry((
+                    req.http.method.to_uppercase(),
+                    saved_url(&req.http.url).to_owned(),
+                ))
+                .or_default()
+                .push(req);
+        }
+    }
+    for filename in [
+        "openapi.yaml",
+        "openapi.yml",
+        "openapi.json",
+        "spec.yaml",
+        "spec.yml",
+        "spec.json",
+    ] {
+        if pending.is_empty() {
+            break;
+        }
+        let Ok(spec) = read_spec(&root.join(filename)) else {
+            continue;
+        };
+        for (path, method, op) in iter_ops(&spec) {
+            if let Some(requests) = pending.remove(&(method.clone(), build_url(&path))) {
+                let schema = mcp_schema(&spec, &method, &path, &op);
+                for req in requests {
+                    req.mcp_schema = Some(schema.clone());
+                }
+            }
+        }
+    }
+}
+
 pub fn preview(spec_path: &Path) -> Result<ImportPreview, String> {
     let spec = read_spec(spec_path)?;
     let ops = iter_ops(&spec);
@@ -566,6 +751,7 @@ pub fn import(
                 auth: Some("inherit".into()),
                 auth_config: None,
             },
+            mcp_schema: Some(mcp_schema(&spec, method, path, op)),
             path: file.to_string_lossy().to_string(),
             rel_path: String::new(),
             id: String::new(),
