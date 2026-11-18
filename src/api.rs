@@ -221,12 +221,15 @@ struct ImportOpenApiArgs<'a> {
     create_env: bool,
     #[serde(rename = "envName")]
     env_name: &'a str,
+    #[serde(rename = "fillEmptyBodies")]
+    fill_empty_bodies: bool,
 }
 pub async fn import_openapi(
     spec_path: &str,
     folder_prefix: &str,
     create_env: bool,
     env_name: &str,
+    fill_empty_bodies: bool,
 ) -> Result<ImportStats, String> {
     call(
         "import_openapi",
@@ -235,6 +238,7 @@ pub async fn import_openapi(
             folder_prefix,
             create_env,
             env_name,
+            fill_empty_bodies,
         },
     )
     .await

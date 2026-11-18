@@ -129,6 +129,7 @@ pub struct ImportPreview {
 pub struct ImportStats {
     pub written: usize,
     pub skipped_existing: usize,
+    pub filled_empty_bodies: usize,
     pub folder_prefix: String,
     pub env_created: Option<String>,
 }

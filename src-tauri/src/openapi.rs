@@ -41,6 +41,7 @@ pub struct ImportPreview {
 pub struct ImportStats {
     pub written: usize,
     pub skipped_existing: usize,
+    pub filled_empty_bodies: usize,
     pub folder_prefix: String,
     pub env_created: Option<String>,
 }
@@ -79,20 +80,20 @@ fn folder_of(op: &Operation) -> String {
 }
 
 fn resolve_schema<'a>(spec: &'a OpenAPI, r: &'a ReferenceOr<Schema>) -> Option<&'a Schema> {
-    match r {
-        ReferenceOr::Item(s) => Some(s),
-        ReferenceOr::Reference { reference } => {
-            let name = reference.rsplit('/').next()?;
-            spec.components
-                .as_ref()?
-                .schemas
-                .get(name)
-                .and_then(|r| match r {
-                    ReferenceOr::Item(s) => Some(s),
-                    _ => None,
-                })
+    let mut current = r;
+    for _ in 0..16 {
+        match current {
+            ReferenceOr::Item(s) => return Some(s),
+            ReferenceOr::Reference { reference } => {
+                let name = reference
+                    .strip_prefix("#/components/schemas/")?
+                    .replace("~1", "/")
+                    .replace("~0", "~");
+                current = spec.components.as_ref()?.schemas.get(&name)?;
+            }
         }
     }
+    None
 }
 
 fn resolve_schema_boxed<'a>(
@@ -102,17 +103,33 @@ fn resolve_schema_boxed<'a>(
     match r {
         ReferenceOr::Item(boxed) => Some(boxed.as_ref()),
         ReferenceOr::Reference { reference } => {
-            let name = reference.rsplit('/').next()?;
-            spec.components
-                .as_ref()?
-                .schemas
-                .get(name)
-                .and_then(|r| match r {
-                    ReferenceOr::Item(s) => Some(s),
-                    _ => None,
-                })
+            let name = reference
+                .strip_prefix("#/components/schemas/")?
+                .replace("~1", "/")
+                .replace("~0", "~");
+            resolve_schema(spec, spec.components.as_ref()?.schemas.get(&name)?)
         }
     }
+}
+
+fn resolve_request_body<'a>(
+    spec: &'a OpenAPI,
+    r: &'a ReferenceOr<openapiv3::RequestBody>,
+) -> Option<&'a openapiv3::RequestBody> {
+    let mut current = r;
+    for _ in 0..16 {
+        match current {
+            ReferenceOr::Item(body) => return Some(body),
+            ReferenceOr::Reference { reference } => {
+                let name = reference
+                    .strip_prefix("#/components/requestBodies/")?
+                    .replace("~1", "/")
+                    .replace("~0", "~");
+                current = spec.components.as_ref()?.request_bodies.get(&name)?;
+            }
+        }
+    }
+    None
 }
 
 /// Build a skeleton JSON value from a schema. Bounded by `depth` to avoid
@@ -170,9 +187,8 @@ fn extract_body(op: &Operation, spec: &OpenAPI) -> Body {
     let Some(rb) = op.request_body.as_ref() else {
         return Body::default();
     };
-    let rb = match rb {
-        ReferenceOr::Item(v) => v,
-        _ => return Body::default(),
+    let Some(rb) = resolve_request_body(spec, rb) else {
+        return Body::default();
     };
     let Some(content) = rb.content.get("application/json") else {
         return Body::default();
@@ -229,19 +245,52 @@ fn extract_body(op: &Operation, spec: &OpenAPI) -> Body {
 }
 
 fn resolve_param<'a>(spec: &'a OpenAPI, r: &'a ReferenceOr<Parameter>) -> Option<&'a Parameter> {
-    match r {
-        ReferenceOr::Item(p) => Some(p),
-        ReferenceOr::Reference { reference } => {
-            let name = reference.rsplit('/').next()?;
-            spec.components
-                .as_ref()?
-                .parameters
-                .get(name)
-                .and_then(|r| match r {
-                    ReferenceOr::Item(p) => Some(p),
-                    _ => None,
-                })
+    let mut current = r;
+    for _ in 0..16 {
+        match current {
+            ReferenceOr::Item(p) => return Some(p),
+            ReferenceOr::Reference { reference } => {
+                let name = reference
+                    .strip_prefix("#/components/parameters/")?
+                    .replace("~1", "/")
+                    .replace("~0", "~");
+                current = spec.components.as_ref()?.parameters.get(&name)?;
+            }
         }
+    }
+    None
+}
+
+fn parameter_key(p: &Parameter) -> (&str, &str) {
+    let kind = match p {
+        Parameter::Query { .. } => "query",
+        Parameter::Header { .. } => "header",
+        Parameter::Path { .. } => "path",
+        Parameter::Cookie { .. } => "cookie",
+    };
+    (kind, &p.parameter_data_ref().name)
+}
+
+fn parameter_example(data: &openapiv3::ParameterData, spec: &OpenAPI) -> Option<String> {
+    let schema = match &data.format {
+        openapiv3::ParameterSchemaOrContent::Schema(s) => resolve_schema(spec, s),
+        _ => None,
+    };
+    let value = data
+        .example
+        .as_ref()
+        .or_else(|| {
+            data.examples.values().find_map(|ex| match ex {
+                ReferenceOr::Item(ex) => ex.value.as_ref(),
+                _ => None,
+            })
+        })
+        .or_else(|| schema.and_then(|s| s.schema_data.example.as_ref()))
+        .or_else(|| schema.and_then(|s| s.schema_data.default.as_ref()))?;
+    match value {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Bool(_) | serde_json::Value::Number(_) => Some(value.to_string()),
+        _ => None,
     }
 }
 
@@ -252,32 +301,19 @@ fn extract_params(op: &Operation, spec: &OpenAPI) -> (Vec<KV>, Vec<KV>) {
         let Some(p) = resolve_param(spec, p) else {
             continue;
         };
-        let (name, kind) = match p {
-            Parameter::Query { parameter_data, .. } => (&parameter_data.name, "query"),
-            Parameter::Header { parameter_data, .. } => (&parameter_data.name, "header"),
-            _ => continue,
-        };
-        let default_val = match p {
-            Parameter::Query { parameter_data, .. }
-            | Parameter::Header { parameter_data, .. }
-            | Parameter::Path { parameter_data, .. }
-            | Parameter::Cookie { parameter_data, .. } => parameter_data
-                .example
-                .as_ref()
-                .and_then(|v| v.as_str().map(String::from))
-                .unwrap_or_default(),
-        };
+        let (kind, name) = parameter_key(p);
+        if kind != "query" && kind != "header" {
+            continue;
+        }
+        let data = p.parameter_data_ref();
+        let value = parameter_example(data, spec).unwrap_or_default();
+        let enabled = data.required || !value.is_empty();
         let kv = KV {
-            name: name.clone(),
-            value: default_val,
+            name: name.to_string(),
+            value,
             r#type: Some(kind.to_string()),
-            description: match p {
-                Parameter::Query { parameter_data, .. }
-                | Parameter::Header { parameter_data, .. }
-                | Parameter::Path { parameter_data, .. }
-                | Parameter::Cookie { parameter_data, .. } => parameter_data.description.clone(),
-            },
-            enabled: Some(true),
+            description: data.description.clone(),
+            enabled: Some(enabled),
         };
         if kind == "header" {
             headers.push(kv);
@@ -354,7 +390,27 @@ fn iter_ops(spec: &OpenAPI) -> Vec<(String, String, Operation)> {
             ("TRACE", &item.trace),
         ] {
             if let Some(op) = op {
-                out.push((path.clone(), method.to_string(), op.clone()));
+                let mut merged = op.clone();
+                let mut params = item.parameters.clone();
+                for parameter in &op.parameters {
+                    if let Some(replacement) = resolve_param(spec, parameter) {
+                        let (kind, name) = parameter_key(replacement);
+                        params.retain(|existing| {
+                            resolve_param(spec, existing).is_none_or(|p| {
+                                let (existing_kind, existing_name) = parameter_key(p);
+                                existing_kind != kind
+                                    || if kind == "header" {
+                                        !existing_name.eq_ignore_ascii_case(name)
+                                    } else {
+                                        existing_name != name
+                                    }
+                            })
+                        });
+                    }
+                    params.push(parameter.clone());
+                }
+                merged.parameters = params;
+                out.push((path.clone(), method.to_string(), merged));
             }
         }
     }
@@ -388,16 +444,85 @@ pub fn preview(spec_path: &Path) -> Result<ImportPreview, String> {
     })
 }
 
+/// Fill only an empty JSON body on the matching request. Keep unknown YAML
+/// fields, and leave edited or mismatched requests untouched.
+fn fill_empty_body(file: &Path, method: &str, url: &str, body: &Body) -> Result<bool, String> {
+    let Some(template) = body.data.as_deref().filter(|s| !s.is_empty()) else {
+        return Ok(false);
+    };
+    if body.r#type.as_deref() != Some("json") {
+        return Ok(false);
+    }
+    let raw = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
+    let mut doc: serde_yaml::Value = serde_yaml::from_str(&raw).map_err(|e| e.to_string())?;
+    let Some(http) = doc
+        .get_mut("http")
+        .and_then(serde_yaml::Value::as_mapping_mut)
+    else {
+        return Ok(false);
+    };
+    if http
+        .get("method")
+        .and_then(serde_yaml::Value::as_str)
+        .is_none_or(|m| !m.eq_ignore_ascii_case(method))
+        || http.get("url").and_then(serde_yaml::Value::as_str) != Some(url)
+    {
+        return Ok(false);
+    }
+    let Some(existing) = http
+        .get_mut("body")
+        .and_then(serde_yaml::Value::as_mapping_mut)
+    else {
+        return Ok(false);
+    };
+    if existing.get("type").and_then(serde_yaml::Value::as_str) != Some("json") {
+        return Ok(false);
+    }
+    for key in ["data", "json", "text"] {
+        if let Some(value) = existing.get(key) {
+            if !value.is_null() && value.as_str().is_none_or(|s| !s.trim().is_empty()) {
+                return Ok(false);
+            }
+        }
+    }
+    existing.insert(
+        serde_yaml::Value::String("data".into()),
+        serde_yaml::Value::String(template.into()),
+    );
+    let output = serde_yaml::to_string(&doc).map_err(|e| e.to_string())?;
+    use std::io::Write;
+    let parent = file
+        .parent()
+        .ok_or_else(|| "request has no parent directory".to_string())?;
+    let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+    temp.as_file()
+        .set_permissions(
+            std::fs::metadata(file)
+                .map_err(|e| e.to_string())?
+                .permissions(),
+        )
+        .map_err(|e| e.to_string())?;
+    temp.write_all(output.as_bytes())
+        .map_err(|e| e.to_string())?;
+    if std::fs::read_to_string(file).map_err(|e| e.to_string())? != raw {
+        return Err(format!("request changed during import: {}", file.display()));
+    }
+    temp.persist(file).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 pub fn import(
     root: &Path,
     spec_path: &Path,
     folder_prefix: &str,
     create_env: bool,
     env_name: &str,
+    fill_empty_bodies: bool,
 ) -> Result<ImportStats, String> {
     let spec = read_spec(spec_path)?;
     let mut written = 0usize;
     let mut skipped = 0usize;
+    let mut filled_empty_bodies = 0usize;
     let ops = iter_ops(&spec);
 
     let base_dir = if folder_prefix.is_empty() {
@@ -415,7 +540,13 @@ pub fn import(
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let file = dir.join(&file_name);
         if file.exists() {
-            skipped += 1;
+            if fill_empty_bodies
+                && fill_empty_body(&file, method, &build_url(path), &extract_body(op, &spec))?
+            {
+                filled_empty_bodies += 1;
+            } else {
+                skipped += 1;
+            }
             continue;
         }
         let (headers, params) = extract_params(op, &spec);
@@ -473,6 +604,7 @@ pub fn import(
     Ok(ImportStats {
         written,
         skipped_existing: skipped,
+        filled_empty_bodies,
         folder_prefix: folder_prefix.to_string(),
         env_created,
     })
@@ -481,3 +613,134 @@ pub fn import(
 // silence unused-warn for internal helpers that could be used later
 #[allow(dead_code)]
 fn _unused_marker(_: SchemaKind, _: Type, _: PathBuf) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SPEC: &str = r##"
+openapi: 3.0.3
+info: {title: Test, version: '1'}
+paths:
+  /widgets/search:
+    post:
+      operationId: search-widgets
+      tags: [widgets]
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SearchRequest'}
+      responses: {'200': {description: ok}}
+components:
+  schemas:
+    SearchRequest:
+      type: object
+      properties:
+        filter: {type: string}
+        limit: {type: integer}
+"##;
+
+    #[test]
+    fn reimport_fills_only_matching_empty_bodies() {
+        let dir = std::env::temp_dir().join(format!(
+            "hitr-openapi-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec = dir.join("spec.yaml");
+        std::fs::write(&spec, SPEC).unwrap();
+        let target = dir.join("out/widgets/search_widgets.yml");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, "info:\n  name: search-widgets\n  type: http\nhttp:\n  method: POST\n  url: '{{baseUrl}}/widgets/search'\n  body:\n    type: json\ncustom_field: keep\n").unwrap();
+        let skipped = import(&dir, &spec, "out", false, "", false).unwrap();
+        assert_eq!(skipped.skipped_existing, 1);
+        let filled = import(&dir, &spec, "out", false, "", true).unwrap();
+        assert_eq!(filled.filled_empty_bodies, 1);
+        let yaml: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
+        assert_eq!(yaml["custom_field"].as_str(), Some("keep"));
+        let body: serde_json::Value =
+            serde_json::from_str(yaml["http"]["body"]["data"].as_str().unwrap()).unwrap();
+        assert_eq!(body["filter"], "");
+        assert_eq!(body["limit"], 0);
+        let before = std::fs::read(&target).unwrap();
+        let again = import(&dir, &spec, "out", false, "", true).unwrap();
+        assert_eq!(again.skipped_existing, 1);
+        assert_eq!(before, std::fs::read(&target).unwrap());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn follows_local_request_body_and_schema_references() {
+        let spec: OpenAPI = serde_yaml::from_str(
+            r##"
+openapi: 3.0.3
+info: {title: Example, version: '1'}
+paths:
+  /widgets:
+    post:
+      requestBody: {$ref: '#/components/requestBodies/WidgetBody'}
+      responses: {'200': {description: ok}}
+components:
+  requestBodies:
+    WidgetBody:
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Alias'}
+  schemas:
+    Alias: {$ref: '#/components/schemas/Widget'}
+    Widget:
+      type: object
+      properties:
+        title: {type: string}
+"##,
+        )
+        .unwrap();
+        let op = &iter_ops(&spec)[0].2;
+        let body = extract_body(op, &spec);
+        let value: serde_json::Value = serde_json::from_str(body.data.as_deref().unwrap()).unwrap();
+        assert_eq!(value["title"], "");
+    }
+
+    #[test]
+    fn imports_inherited_and_overridden_parameters_with_values() {
+        let spec: OpenAPI = serde_yaml::from_str(
+            r##"
+openapi: 3.0.3
+info: {title: Test, version: '1'}
+paths:
+  /items:
+    parameters:
+      - $ref: '#/components/parameters/Page'
+      - {in: query, name: empty, schema: {type: string}}
+      - {in: header, name: X-Mode, schema: {type: string}, example: old}
+    get:
+      parameters:
+        - {in: header, name: x-mode, schema: {type: string}, example: new}
+        - {in: query, name: enabled, schema: {type: boolean, default: false}}
+      responses: {'200': {description: ok}}
+components:
+  parameters:
+    Page: {in: query, name: page, schema: {type: integer, example: 3}}
+"##,
+        )
+        .unwrap();
+        let op = &iter_ops(&spec)[0].2;
+        let (headers, params) = extract_params(op, &spec);
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].value, "new");
+        let page = params.iter().find(|p| p.name == "page").unwrap();
+        assert_eq!(page.value, "3");
+        assert_eq!(page.enabled, Some(true));
+        let empty = params.iter().find(|p| p.name == "empty").unwrap();
+        assert_eq!(empty.enabled, Some(false));
+        assert_eq!(
+            params.iter().find(|p| p.name == "enabled").unwrap().value,
+            "false"
+        );
+    }
+}

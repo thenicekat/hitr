@@ -483,6 +483,7 @@ fn import_openapi(
     folder_prefix: String,
     create_env: bool,
     env_name: String,
+    fill_empty_bodies: bool,
 ) -> Result<openapi::ImportStats, String> {
     let root = state.root.lock().unwrap().clone();
     openapi::import(
@@ -491,6 +492,7 @@ fn import_openapi(
         &folder_prefix,
         create_env,
         &env_name,
+        fill_empty_bodies,
     )
 }
 

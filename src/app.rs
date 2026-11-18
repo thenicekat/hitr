@@ -702,7 +702,7 @@ pub fn App() -> Element {
                     }
                 }
                 Modal::ImportOpenApi => rsx! {
-                    ImportOpenApiModal { on_close: move |_| { modal.set(Modal::None); load_all.call(()); } }
+                    ImportOpenApiModal { on_close: move |_| { modal.set(Modal::None); load_all.call(()); }, on_toast: move |msg: String| toast.set(Some(msg)) }
                 },
                 Modal::ImportCurl => {
                     let default_folder = selected_req_obj.read().as_ref().and_then(|r| {
@@ -1236,11 +1236,12 @@ fn ImportCurlModal(default_folder: String, on_close: EventHandler<()>) -> Elemen
 }
 
 #[component]
-fn ImportOpenApiModal(on_close: EventHandler<()>) -> Element {
+fn ImportOpenApiModal(on_close: EventHandler<()>, on_toast: EventHandler<String>) -> Element {
     let mut spec_path = use_signal(String::new);
     let mut folder_prefix = use_signal(|| "openapi".to_string());
     let mut env_name = use_signal(String::new);
     let mut create_env = use_signal(|| true);
+    let mut fill_empty_bodies = use_signal(|| false);
     let mut preview = use_signal(|| None::<ImportPreview>);
     let mut err = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
@@ -1275,17 +1276,25 @@ fn ImportOpenApiModal(on_close: EventHandler<()>) -> Element {
         let fp = folder_prefix.read().clone();
         let ce = *create_env.read();
         let en = env_name.read().clone();
+        let fill = *fill_empty_bodies.read();
         if preview.peek().is_none() {
             err.set(Some("preview first".into()));
             return;
         }
         busy.set(true);
         spawn(async move {
-            match api::import_openapi(&p, &fp, ce, &en).await {
-                Ok(_) => on_close.call(()),
+            let result = api::import_openapi(&p, &fp, ce, &en, fill).await;
+            busy.set(false);
+            match result {
+                Ok(stats) => {
+                    on_toast.call(format!(
+                        "Imported {} requests; filled {} empty bodies; skipped {} existing",
+                        stats.written, stats.filled_empty_bodies, stats.skipped_existing
+                    ));
+                    on_close.call(());
+                }
                 Err(e) => err.set(Some(e)),
             }
-            busy.set(false);
         });
     };
 
@@ -1297,7 +1306,7 @@ fn ImportOpenApiModal(on_close: EventHandler<()>) -> Element {
                 input {
                     autofocus: true,
                     value: "{spec_path}",
-                    oninput: move |e| spec_path.set(e.value()),
+                    oninput: move |e| { spec_path.set(e.value()); preview.set(None); },
                     placeholder: "/path/to/openapi.yaml"
                 }
                 div { class: "modal-actions", style: "justify-content: flex-start; margin-top: 8px;",
@@ -1349,6 +1358,10 @@ fn ImportOpenApiModal(on_close: EventHandler<()>) -> Element {
                         onchange: move |e| create_env.set(e.checked()),
                     }
                     span { class: "small", "create env with suggested vars" }
+                }
+                div { style: "display: flex; align-items: center; gap: 8px; margin-top: 12px;",
+                    input { r#type: "checkbox", checked: *fill_empty_bodies.read(), onchange: move |e| fill_empty_bodies.set(e.checked()) }
+                    span { class: "small", "Fill empty JSON bodies in matching existing requests (rewrites YAML formatting and comments)" }
                 }
                 if *create_env.read() {
                     label { "env name" }
