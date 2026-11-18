@@ -37,6 +37,7 @@ age = { version = "0.11", features = ["armor"] }
 secrecy = "0.10"
 zeroize = "1"
 openapiv3 = "2"
+rmcp = { version = "3.11", default-features = false, features = ["server", "macros", "transport-async-rw"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

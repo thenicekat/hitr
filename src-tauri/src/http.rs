@@ -149,6 +149,53 @@ pub async fn fire(
     env: Option<&Env>,
     vault_data: Option<&VaultData>,
 ) -> Result<FiredResponse, String> {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let request = prepare(&client, req, env, vault_data, None)?;
+    let started = Instant::now();
+    let resp = client.execute(request).await.map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
+    let status_text = resp.status().canonical_reason().unwrap_or("").to_string();
+    let final_url = resp.url().to_string();
+    let headers: Vec<(String, String)> = resp
+        .headers()
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+        .collect();
+    let is_json = headers
+        .iter()
+        .any(|(k, v)| k.eq_ignore_ascii_case("content-type") && v.contains("json"));
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    let body = if is_json {
+        serde_json::from_str::<serde_json::Value>(&text)
+            .and_then(|v| serde_json::to_string_pretty(&v))
+            .unwrap_or(text)
+    } else {
+        text
+    };
+    let latency_ms = started.elapsed().as_millis() as u64;
+    Ok(FiredResponse {
+        status,
+        status_text,
+        latency_ms,
+        headers,
+        body,
+        is_json,
+        final_url,
+    })
+}
+
+/// Build the same request for desktop and MCP. MCP pins the resolved origin
+/// before adding auth so templated URLs cannot bypass the grant.
+pub fn prepare(
+    client: &reqwest::Client,
+    req: &Request,
+    env: Option<&Env>,
+    vault_data: Option<&VaultData>,
+    allowed_origin: Option<&url::Origin>,
+) -> Result<reqwest::Request, String> {
     let vars = env
         .map(|e| resolve_env_vars(e, vault_data))
         .unwrap_or_default();
@@ -168,14 +215,31 @@ pub async fn fire(
 
     let method = req.http.method.to_uppercase();
 
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(5))
-        .build()
-        .map_err(|e| e.to_string())?;
-
     let m = reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| e.to_string())?;
     let mut parsed =
         reqwest::Url::parse(&url).map_err(|e| format!("invalid url `{}`: {}", url, e))?;
+    if let Some(origin) = allowed_origin {
+        if parsed.scheme() != "https"
+            || &parsed.origin() != origin
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
+            return Err("Request no longer matches its approved HTTPS origin.".into());
+        }
+        if req
+            .http
+            .headers
+            .iter()
+            .any(|header| header.enabled != Some(false) && header.name.eq_ignore_ascii_case("host"))
+            || req.http.auth_config.as_ref().is_some_and(|auth| {
+                auth.mode == "api_key"
+                    && auth.r#in == "header"
+                    && auth.key.eq_ignore_ascii_case("host")
+            })
+        {
+            return Err("MCP requests cannot override the Host header.".into());
+        }
+    }
     // Append enabled params from the params tab. Existing query keys in the
     // URL are left alone; params tab rows are added, so URL wins on conflict.
     // Substitute {{var}} in each key/value first.
@@ -280,6 +344,14 @@ pub async fn fire(
             if !has_auth_header {
                 if let Some(bearer) = vars.get("bearerToken") {
                     rb = rb.header("Authorization", format!("Bearer {}", bearer));
+                } else if allowed_origin.is_some()
+                    && env.is_some_and(|env| {
+                        env.variables
+                            .iter()
+                            .any(|v| v.name == "bearerToken" && v.secret)
+                    })
+                {
+                    all_missing.insert("bearerToken".to_string());
                 }
             }
         }
@@ -335,37 +407,7 @@ pub async fn fire(
             all_missing.into_iter().collect::<Vec<_>>().join(", ")
         ));
     }
-    let started = Instant::now();
-    let resp = rb.send().await.map_err(|e| e.to_string())?;
-    let status = resp.status().as_u16();
-    let status_text = resp.status().canonical_reason().unwrap_or("").to_string();
-    let final_url = resp.url().to_string();
-    let headers: Vec<(String, String)> = resp
-        .headers()
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
-        .collect();
-    let is_json = headers
-        .iter()
-        .any(|(k, v)| k.eq_ignore_ascii_case("content-type") && v.contains("json"));
-    let text = resp.text().await.map_err(|e| e.to_string())?;
-    let body = if is_json {
-        serde_json::from_str::<serde_json::Value>(&text)
-            .and_then(|v| serde_json::to_string_pretty(&v))
-            .unwrap_or(text)
-    } else {
-        text
-    };
-    let latency_ms = started.elapsed().as_millis() as u64;
-    Ok(FiredResponse {
-        status,
-        status_text,
-        latency_ms,
-        headers,
-        body,
-        is_json,
-        final_url,
-    })
+    rb.build().map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

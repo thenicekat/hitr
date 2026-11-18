@@ -28,7 +28,7 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.pbkdf2]
 opt-level = 3
-[profile.dev.package.sha2]
+[profile.dev.package."sha2:0.10"]
 opt-level = 3
 [profile.dev.package.hmac]
 opt-level = 3

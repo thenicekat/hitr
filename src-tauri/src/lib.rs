@@ -18,6 +18,8 @@ mod curl;
 mod history;
 mod http;
 mod loader;
+#[cfg(unix)]
+pub mod mcp;
 mod model;
 mod openapi;
 mod vault;
@@ -27,7 +29,7 @@ use crate::vault::VaultState;
 use age::secrecy::SecretString;
 use directories::BaseDirs;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::AppHandle;
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -35,7 +37,7 @@ use tauri_plugin_dialog::DialogExt;
 struct AppState {
     root: Mutex<PathBuf>,
     collection: Mutex<Option<Collection>>,
-    vault: VaultState,
+    vault: Arc<VaultState>,
 }
 
 fn require_password(state: &AppState) -> Result<SecretString, String> {
@@ -128,15 +130,17 @@ async fn vault_unlock(state: State<'_, AppState>, password: String) -> Result<()
     })
     .await
     .map_err(|_| "Vault unlock task failed.".to_string())??;
+    let mut cache = state.vault.cache.lock().unwrap();
     *state.vault.password.lock().unwrap() = Some(secret);
-    *state.vault.cache.lock().unwrap() = data;
+    *cache = data;
     Ok(())
 }
 
 #[tauri::command]
 fn vault_lock(state: State<AppState>) {
+    let mut cache = state.vault.cache.lock().unwrap();
     *state.vault.password.lock().unwrap() = None;
-    *state.vault.cache.lock().unwrap() = None;
+    *cache = None;
 }
 
 #[tauri::command]
@@ -590,8 +594,10 @@ pub fn run() {
             app.manage(AppState {
                 root: Mutex::new(root.clone()),
                 collection: Mutex::new(None),
-                vault: VaultState::default(),
+                vault: Arc::new(VaultState::default()),
             });
+            #[cfg(unix)]
+            mcp::start(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
