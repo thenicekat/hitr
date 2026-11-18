@@ -1437,7 +1437,7 @@ fn RequestEditor(
         }
         merged
     });
-    let mut auth_config = use_signal(|| req.http.auth_config.clone().unwrap_or_default());
+    let auth_config = use_signal(|| req.http.auth_config.clone().unwrap_or_default());
     let mut body_type = use_signal(|| req.http.body.kind.clone().unwrap_or_default());
     let mut body_text = use_signal(|| {
         // Bruno stores body under `data`; older hitr saves used `json`/`text`.
