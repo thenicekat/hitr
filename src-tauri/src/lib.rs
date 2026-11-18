@@ -22,6 +22,7 @@ mod loader;
 pub mod mcp;
 mod model;
 mod openapi;
+mod updates;
 mod vault;
 
 use crate::model::*;
@@ -664,6 +665,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
+            #[cfg(target_os = "macos")]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            app.manage(updates::Installer::default());
             app.manage(AppState {
                 root: Mutex::new(root.clone()),
                 collection: Arc::new(Mutex::new(None)),
@@ -686,6 +691,8 @@ pub fn run() {
             vault_status,
             mcp_help,
             set_mcp_enabled,
+            updates::check_update,
+            updates::install_update,
             vault_unlock,
             vault_lock,
             get_secret,

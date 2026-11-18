@@ -587,3 +587,15 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   margin: 6px 0 10px;
 }
 .mcp-enable { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+
+.update-notice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+}
+.update-notice span { margin-right: auto; font-weight: 600; }
+.update-notice p { width: 100%; margin: 0; color: var(--err); }

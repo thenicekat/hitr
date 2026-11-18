@@ -47,6 +47,7 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           # ad-hoc sign — no Apple Developer cert, but bypasses xattr for
           # most users. First launch still shows Gatekeeper right-click prompt.
           APPLE_SIGNING_IDENTITY: "-"
@@ -55,4 +56,19 @@ jobs:
           releaseName: ${{ github.ref_name }}
           releaseDraft: true
           prerelease: false
-          args: --target ${{ matrix.target }}
+          args: --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json
+
+  verify-updates:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify the updater manifest for both Mac architectures
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern latest.json
+          jq -e --arg version "${GITHUB_REF_NAME#v}" '
+            .version == $version and
+            (.platforms["darwin-aarch64"] | .signature != "" and .signature != null and (.url | endswith(".app.tar.gz"))) and
+            (.platforms["darwin-x86_64"] | .signature != "" and .signature != null and (.url | endswith(".app.tar.gz")))
+          ' latest.json

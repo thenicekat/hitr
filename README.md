@@ -62,6 +62,12 @@ Then launch normally. Alternative: right-click `hitr.app` → **Open** → **Ope
 
 If macOS still refuses ("hitr is damaged"), the download attribute wasn't cleared — re-run `xattr` targeting the actual path, or try the same command on the `.dmg` before opening it.
 
+### App updates
+
+Hitr checks for new releases at launch. When an update is available, choose **Update and restart** to download the package, verify its signature, and install it. Older builds without the updater need a one-time manual install from GitHub Releases.
+
+Release builds publish signed update archives and a `latest.json` manifest alongside the DMGs. The release workflow needs the repository’s `TAURI_SIGNING_PRIVATE_KEY` secret. Keep a secure backup of the matching private key outside the repository.
+
 ### From source
 
 ```bash

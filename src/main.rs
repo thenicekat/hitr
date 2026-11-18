@@ -9,6 +9,7 @@ mod api;
 mod app;
 mod mcp_help;
 mod types;
+mod update_notice;
 
 use app::App;
 use dioxus::prelude::*;
