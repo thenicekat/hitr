@@ -247,12 +247,16 @@ impl Broker {
                 .await
                 .map_err(|_| "Hitr could not reach the saved API.")?;
             let status = response.status().as_u16();
-            let body = read_body(response, &secrets).await?;
+            let (body, omission_reason) = match read_body(response, &secrets).await? {
+                Ok(body) => (Some(body), None),
+                Err(reason) => (None, Some(reason)),
+            };
             Ok(json!({
                 "status": status,
                 "latency_ms": start.elapsed().as_millis() as u64,
                 "body": body,
                 "body_omitted": body.is_none(),
+                "body_omitted_reason": omission_reason,
             }))
         };
         tokio::select! {
@@ -303,7 +307,7 @@ fn response_secrets(
 async fn read_body(
     mut response: reqwest::Response,
     secrets: &[String],
-) -> Result<Option<String>, &'static str> {
+) -> Result<Result<String, &'static str>, &'static str> {
     let mut bytes = Vec::new();
     while let Some(chunk) = response
         .chunk()
@@ -311,14 +315,14 @@ async fn read_body(
         .map_err(|_| "Hitr could not read the API response.")?
     {
         if bytes.len() + chunk.len() > MAX_BODY_BYTES {
-            return Ok(None);
+            return Ok(Err("size_limit"));
         }
         bytes.extend_from_slice(&chunk);
     }
     let Ok(body) = String::from_utf8(bytes) else {
-        return Ok(None);
+        return Ok(Err("invalid_utf8"));
     };
-    Ok(filter_body(body, secrets))
+    Ok(filter_body(body, secrets).ok_or("credential_match"))
 }
 
 fn filter_body(body: String, secrets: &[String]) -> Option<String> {
