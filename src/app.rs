@@ -488,7 +488,7 @@ pub fn App() -> Element {
                 // envs pane
                 div { class: "pane envs",
                     div { class: "pane-hdr",
-                        span { "envs" }
+                        span { "Environments" }
                         if let Some(env) = selected_env_obj.read().as_ref() {
                             button { class: "btn icon", title: "edit env",
                                 onclick: move |_| modal.set(Modal::EditEnv), "✎" }
@@ -512,9 +512,12 @@ pub fn App() -> Element {
                                 }
                             }
                         }
-                        button { class: "btn icon", title: "new env", onclick: move |_| modal.set(Modal::NewEnv), "+" }
+                        button { class: "btn icon", title: "New environment", aria_label: "New environment", onclick: move |_| modal.set(Modal::NewEnv), "+" }
                     }
                     div { class: "list",
+                        if collection.read().envs.is_empty() {
+                            div { class: "list-empty", "No environments yet. Use + to add one." }
+                        }
                         for env in collection.read().envs.iter() {
                             {
                                 let name = env.name.clone();
@@ -539,7 +542,8 @@ pub fn App() -> Element {
                     div { class: "pane-hdr",
                         input {
                             class: "search",
-                            placeholder: "search {total_reqs} requests…",
+                            placeholder: "Search {total_reqs} requests…",
+                            aria_label: "Search requests",
                             value: "{filter}",
                             oninput: move |e| filter.set(e.value()),
                         }
@@ -550,11 +554,14 @@ pub fn App() -> Element {
                                 "{total_reqs}"
                             }
                         }
-                        button { class: "btn small", title: "import curl", onclick: move |_| modal.set(Modal::ImportCurl), "curl" }
-                        button { class: "btn small", title: "import openapi spec", onclick: move |_| modal.set(Modal::ImportOpenApi), "spec" }
-                        button { class: "btn icon", title: "new request", onclick: move |_| modal.set(Modal::NewRequest), "+" }
+                        button { class: "btn small", title: "import curl", onclick: move |_| modal.set(Modal::ImportCurl), "Import cURL" }
+                        button { class: "btn small", title: "import openapi spec", onclick: move |_| modal.set(Modal::ImportOpenApi), "OpenAPI" }
+                        button { class: "btn icon", title: "New request", aria_label: "New request", onclick: move |_| modal.set(Modal::NewRequest), "+" }
                     }
                     div { class: "list",
+                        if *shown_reqs.read() == 0 {
+                            div { class: "list-empty", "No requests to show. Create one or import a collection." }
+                        }
                         {
                             let sel = selected_req.read().clone();
                             let reqs = filtered_reqs.read();
@@ -589,7 +596,7 @@ pub fn App() -> Element {
                         }
                     } else {
                         div { class: "pane-hdr",
-                            span { class: "muted", "select a request" }
+                            span { class: "muted", "Request" }
                         }
                     }
                     div { class: "response-body",
@@ -665,7 +672,10 @@ pub fn App() -> Element {
                                 pre { class: "body-json", "{resp.body}" }
                             }
                         } else {
-                            div { class: "muted center", "no response yet" }
+                            div { class: "empty-state",
+                                strong { "Your response will appear here" }
+                                span { "Select a request and send it to see the status, headers, and body." }
+                            }
                         }
                     }
                 }
@@ -1628,7 +1638,7 @@ fn RequestEditor(
                     class: if firing { "btn primary disabled" } else { "btn primary" },
                     disabled: firing,
                     onclick: move |_| on_fire.call(()),
-                    if firing { "…" } else { "send" }
+                    if firing { "Sending…" } else { "Send" }
                 }
             }
             div { class: "req-tabs",
