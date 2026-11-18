@@ -319,19 +319,23 @@ pub fn App() -> Element {
     let mut history = use_signal(Vec::<FiredResponse>::new);
     use_effect(move || {
         let rid = selected_req.read().clone();
+        response.set(None);
         spawn(async move {
             let Some(rid) = rid else {
                 history.set(Vec::new());
                 return;
             };
-            match api::load_history(&rid).await {
-                Ok(h) => history.set(h),
-                Err(_) => history.set(Vec::new()),
+            let loaded = api::load_history(&rid).await;
+            if selected_req.peek().as_deref() == Some(rid.as_str()) {
+                history.set(loaded.unwrap_or_default());
             }
         });
     });
 
     let fire = use_callback(move |()| {
+        if *firing.peek() {
+            return;
+        }
         let req_id = selected_req.read().clone();
         let env_name = selected_env.read().clone();
         let Some(req_id) = req_id else { return };
@@ -341,14 +345,20 @@ pub fn App() -> Element {
         spawn(async move {
             match api::fire_request(&req_id, env_name.as_deref()).await {
                 Ok(r) => {
-                    response.set(Some(r));
-                    // Reload from disk to pick up the newly-appended entry
-                    // (backend wrote it in fire_request).
-                    if let Ok(h) = api::load_history(&req_id).await {
-                        history.set(h);
+                    if selected_req.peek().as_deref() == Some(req_id.as_str()) {
+                        response.set(Some(r));
+                        if let Ok(h) = api::load_history(&req_id).await
+                            && selected_req.peek().as_deref() == Some(req_id.as_str())
+                        {
+                            history.set(h);
+                        }
                     }
                 }
-                Err(e) => error.set(Some(format!("fire: {}", e))),
+                Err(e) => {
+                    if selected_req.peek().as_deref() == Some(req_id.as_str()) {
+                        error.set(Some(format!("fire: {}", e)));
+                    }
+                }
             }
             firing.set(false);
         });
