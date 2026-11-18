@@ -34,7 +34,7 @@ Built because heavyweight Electron clients are slow and cloud-first tools want y
 
 **Response pane**
 - Status, latency (ms), headers, pretty-printed JSON body
-- In-memory history: last 10 fires per request
+- Local history: last 20 responses per request, stored in the collection's `.hitr/history` directory
 - Copy response body or copy request as curl (with resolved vars) to clipboard
 
 **Ops**
@@ -126,6 +126,8 @@ Passphrase-derived key, [age](https://age-encryption.org/) format (ChaCha20-Poly
 
 **Rename semantics** — renaming an env rewrites the yml at the new path AND migrates the vault entries under the new env name in a single transaction. Delete an env → yml deleted + vault entries for that env purged.
 
+Response history is stored unencrypted in `<collection-root>/.hitr/history/`. Responses can contain sensitive data; exclude `.hitr/` from version control and protect the collection directory accordingly.
+
 **What's safe to commit to git:**
 - Request `.yml` files ✅
 - Env `.yml` files ✅ (contain names + non-secret values, but never secrets)
@@ -138,11 +140,11 @@ Passphrase-derived key, [age](https://age-encryption.org/) format (ChaCha20-Poly
 
 **curl**: handles `-X`, `-H`, `-d/--data*`, `--json`, quoted args, backslash line-continuation. Ignores `-F/--form` (multipart), cookies, auth flags.
 
-**OpenAPI**: reads yaml or json, walks `paths.<path>.<method>`, one request per operation. Folder = first tag. Extracts query + header params. Body from `application/json` example (no schema-driven generation). Suggested env vars from `servers[0]` + `securitySchemes`. Skips existing files — re-import is idempotent.
+**OpenAPI**: reads YAML or JSON and creates a request per operation, grouped by the first tag. Query and header parameters are taken from both the path and operation; optional parameters without a value start disabled. JSON bodies use an example when available, or a schema-based template. Existing requests are skipped by default. To fill empty JSON bodies from a spec, select **Fill empty JSON bodies** during re-import and use the same folder prefix as the original import. Only matching requests with empty JSON bodies are changed; YAML formatting and comments in those files will be rewritten. Existing nonempty bodies are preserved.
 
 ## Deliberate non-features
 
-Persistent request history. Pre/post scripting. Chained requests. Team sync. GraphQL builder. Cookie jar. WebSocket. gRPC. File upload / multipart.
+Pre/post scripting. Chained requests. Team sync. GraphQL builder. Cookie jar. WebSocket. gRPC. File upload / multipart.
 
 If it's in Postman and not here, it's on purpose.
 
