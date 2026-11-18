@@ -36,6 +36,7 @@ pub fn resolve_env_vars(env: &Env, vault_data: Option<&VaultData>) -> HashMap<St
                     continue;
                 }
             }
+            continue;
         }
         if !v.value.is_empty() {
             out.insert(v.name.clone(), v.value.clone());
@@ -50,14 +51,14 @@ pub fn resolve_env_vars(env: &Env, vault_data: Option<&VaultData>) -> HashMap<St
 /// backslash escapes inside strings.
 pub fn strip_json_comments(s: &str) -> String {
     let bytes = s.as_bytes();
-    let mut out = String::with_capacity(s.len());
+    let mut out = Vec::with_capacity(s.len());
     let mut i = 0;
     let mut in_str = false;
     let mut escape = false;
     while i < bytes.len() {
         let c = bytes[i];
         if in_str {
-            out.push(c as char);
+            out.push(c);
             if escape {
                 escape = false;
             } else if c == b'\\' {
@@ -70,7 +71,7 @@ pub fn strip_json_comments(s: &str) -> String {
         }
         if c == b'"' {
             in_str = true;
-            out.push('"');
+            out.push(b'"');
             i += 1;
             continue;
         }
@@ -96,10 +97,10 @@ pub fn strip_json_comments(s: &str) -> String {
                 _ => {}
             }
         }
-        out.push(c as char);
+        out.push(c);
         i += 1;
     }
-    out
+    String::from_utf8(out).expect("removing ASCII comments preserves UTF-8")
 }
 
 /// Replace `{{name}}` occurrences in `s` with values from `vars`. Returns
@@ -205,7 +206,8 @@ pub async fn fire(
     if mode == "api_key" {
         if let Some(ac) = &req.http.auth_config {
             if ac.r#in == "query" || ac.r#in.is_empty() {
-                let (val, _) = substitute(&ac.token, &vars);
+                let (val, missing) = substitute(&ac.token, &vars);
+                all_missing.extend(missing);
                 let key = ac.key.as_str();
                 if !key.is_empty() && !val.is_empty() {
                     parsed.query_pairs_mut().append_pair(key, &val);
@@ -231,13 +233,14 @@ pub async fn fire(
         .http
         .headers
         .iter()
-        .any(|h| h.name.eq_ignore_ascii_case("authorization"));
+        .any(|h| h.enabled != Some(false) && h.name.eq_ignore_ascii_case("authorization"));
     match mode {
         "none" => {}
         "bearer" => {
             if !has_auth_header {
                 if let Some(ac) = &req.http.auth_config {
-                    let (tok, _) = substitute(&ac.token, &vars);
+                    let (tok, missing) = substitute(&ac.token, &vars);
+                    all_missing.extend(missing);
                     if !tok.is_empty() {
                         rb = rb.header("Authorization", format!("Bearer {}", tok));
                     }
@@ -248,7 +251,8 @@ pub async fn fire(
             if let Some(ac) = &req.http.auth_config {
                 // header placement only — query was handled above
                 if ac.r#in == "header" {
-                    let (val, _) = substitute(&ac.token, &vars);
+                    let (val, missing) = substitute(&ac.token, &vars);
+                    all_missing.extend(missing);
                     let key = ac.key.as_str();
                     if !key.is_empty() && !val.is_empty() {
                         rb = rb.header(key, val);
@@ -259,8 +263,10 @@ pub async fn fire(
         "basic" => {
             if !has_auth_header {
                 if let Some(ac) = &req.http.auth_config {
-                    let (user, _) = substitute(&ac.key, &vars);
-                    let (pass, _) = substitute(&ac.token, &vars);
+                    let (user, missing) = substitute(&ac.key, &vars);
+                    all_missing.extend(missing);
+                    let (pass, missing) = substitute(&ac.token, &vars);
+                    all_missing.extend(missing);
                     if !user.is_empty() {
                         let pass_opt: Option<&str> =
                             if pass.is_empty() { None } else { Some(&pass) };
@@ -323,6 +329,12 @@ pub async fn fire(
         }
     }
 
+    if !all_missing.is_empty() {
+        return Err(format!(
+            "unresolved var(s): {} — set values via env editor",
+            all_missing.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
     let started = Instant::now();
     let resp = rb.send().await.map_err(|e| e.to_string())?;
     let status = resp.status().as_u16();
@@ -354,4 +366,62 @@ pub async fn fire(
         is_json,
         final_url,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn comments_preserve_unicode_and_strings() {
+        let body = "{\"message\":\"世界 🌍 // preserved\", /* note */ \"n\": 1 // comment\n}";
+        let parsed: serde_json::Value = serde_json::from_str(&strip_json_comments(body)).unwrap();
+        assert_eq!(parsed["message"], "世界 🌍 // preserved");
+        assert_eq!(parsed["n"], 1);
+    }
+
+    #[tokio::test]
+    async fn unresolved_values_fail_before_request() {
+        let mut req = Request::default();
+        req.http.method = "POST".into();
+        req.http.url = "http://127.0.0.1:1/".into();
+        req.http.headers.push(KV {
+            name: "x-test".into(),
+            value: "{{header}}".into(),
+            ..Default::default()
+        });
+        req.http.params.push(KV {
+            name: "filter".into(),
+            value: "{{query}}".into(),
+            ..Default::default()
+        });
+        req.http.body = Body {
+            r#type: Some("json".into()),
+            data: Some("{\"v\":\"{{body}}\"}".into()),
+            ..Default::default()
+        };
+        req.http.auth_config = Some(AuthConfig {
+            mode: "bearer".into(),
+            token: "{{token}}".into(),
+            ..Default::default()
+        });
+        let error = fire(&req, None, None).await.unwrap_err();
+        for name in ["header", "query", "body", "token"] {
+            assert!(error.contains(name), "missing {name} in {error}");
+        }
+    }
+
+    #[test]
+    fn locked_secret_never_falls_back_to_yaml_value() {
+        let env = Env {
+            name: "dev".into(),
+            variables: vec![EnvVar {
+                name: "token".into(),
+                value: "stale".into(),
+                secret: true,
+            }],
+            ..Default::default()
+        };
+        assert!(!resolve_env_vars(&env, None).contains_key("token"));
+    }
 }
