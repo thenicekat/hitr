@@ -79,48 +79,20 @@ Point hitr at your collection root: click `root: /...` in the topbar, paste a pa
 
 ## MCP for agents
 
-Hitr exposes two tools through the [MCP stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports):
+1. Open **MCP help** in Hitr and turn on **Enable MCP**. The setting is off by default and is remembered across launches. Previous per-request grant files do not enable this setting.
+2. Copy the client configuration from MCP help and add it to your MCP client. Set the server command to the installed Hitr executable and pass `mcp` as its argument.
+3. Keep Hitr open and unlock its vault. Both MCP tools pause when the vault locks or MCP is disabled.
 
 | Tool | What it does |
 | --- | --- |
-| `search_requests` | Finds approved saved requests by name, ID, or HTTP method and lists their approved environments. An empty query lists the first 25 entries. |
-| `send_request` | Runs a saved request by its exact ID and environment. Use `null` when the request was approved without an environment. |
+| `search_requests` | Finds saved requests by name, ID, or method and lists the available environments. Send an empty query to browse. Pass back `next_offset` as `offset` to get another page. |
+| `send_request` | Runs a saved request by its exact ID with the selected environment. Pass `null` to run without an environment. |
 
-1. Save the requests you want to expose in your Hitr collection. Use vault variables for credentials, such as an environment's secret `bearerToken`.
-2. Create `~/Library/Application Support/hitr/mcp.json` with the request and environment pairs you want to allow. The example uses `widgets/list.yml`, a request path relative to the collection root. The origin must match the resolved HTTPS destination of that request.
+MCP can use every saved request and environment in the open collection, including production. Saved requests can change remote data. Keep MCP enabled only if you want local clients to have that access while Hitr is unlocked.
 
-   ```json
-   {
-     "grants": [
-       {
-         "request_id": "widgets/list.yml",
-         "environment": "sandbox",
-         "origin": "https://api.example.com",
-         "return_body": true
-       }
-     ]
-   }
-   ```
+Hitr attaches credentials in the desktop process, checks the selected environment’s `baseUrl` origin when it is configured, and sends MCP requests over HTTPS without following redirects. Clients select the saved request and environment and cannot provide request overrides. Results include the HTTP status, latency, and bounded response body. Hitr suppresses oversized, non-UTF-8, and known credential echoes. An API response can still contain sensitive data.
 
-3. Restart Hitr. It reads the grants and snapshots the approved saved requests and environment settings at startup. Unlock the vault in Hitr when sending a request that needs it.
-4. Configure your MCP client to run the installed Hitr executable with the `mcp` argument. For clients that use an `mcpServers` JSON setting:
-
-   ```json
-   {
-     "mcpServers": {
-       "hitr": {
-         "command": "/Applications/hitr.app/Contents/MacOS/hitr",
-         "args": ["mcp"]
-       }
-     }
-   }
-   ```
-
-The client connects to the running desktop app through a private Unix socket. Hitr keeps the vault password out of MCP and attaches credentials inside the desktop process. Agents cannot supply a URL, method, headers, or body. Hitr checks the approved origin before sending and disables redirects for MCP calls.
-
-Results include the HTTP status and latency. Response bodies are off by default. Enable `return_body` only for APIs whose content is appropriate to share with the agent. Hitr suppresses oversized, non-UTF-8, and known credential echoes, but a remote API can return other sensitive data or transform a credential in ways Hitr cannot detect. Approve only requests the agent may execute. Locking the vault stops new calls that need it. To revoke an approval, edit the grant file and restart the app.
-
-The socket limits access to the local user account. This does not isolate an agent that can already run arbitrary commands or edit files as that user.
+MCP uses a private local socket and the [stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports). The socket limits access to the local user account.
 
 ## Layout
 

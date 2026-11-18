@@ -153,7 +153,7 @@ pub async fn fire(
         .redirect(reqwest::redirect::Policy::limited(5))
         .build()
         .map_err(|e| e.to_string())?;
-    let request = prepare(&client, req, env, vault_data, None)?;
+    let request = prepare(&client, req, env, vault_data, RequestMode::Desktop)?;
     let started = Instant::now();
     let resp = client.execute(request).await.map_err(|e| e.to_string())?;
     let status = resp.status().as_u16();
@@ -187,14 +187,20 @@ pub async fn fire(
     })
 }
 
-/// Build the same request for desktop and MCP. MCP pins the resolved origin
-/// before adding auth so templated URLs cannot bypass the grant.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RequestMode {
+    Desktop,
+    Mcp,
+}
+
+/// MCP uses the saved request and selected environment as its only inputs.
+/// An environment base URL also restricts where its credentials can be sent.
 pub fn prepare(
     client: &reqwest::Client,
     req: &Request,
     env: Option<&Env>,
     vault_data: Option<&VaultData>,
-    allowed_origin: Option<&url::Origin>,
+    mode: RequestMode,
 ) -> Result<reqwest::Request, String> {
     let vars = env
         .map(|e| resolve_env_vars(e, vault_data))
@@ -218,13 +224,21 @@ pub fn prepare(
     let m = reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| e.to_string())?;
     let mut parsed =
         reqwest::Url::parse(&url).map_err(|e| format!("invalid url `{}`: {}", url, e))?;
-    if let Some(origin) = allowed_origin {
+    if mode == RequestMode::Mcp {
         if parsed.scheme() != "https"
-            || &parsed.origin() != origin
             || !parsed.username().is_empty()
             || parsed.password().is_some()
         {
-            return Err("Request no longer matches its approved HTTPS origin.".into());
+            return Err("MCP requires an HTTPS URL without embedded credentials.".into());
+        }
+        if env.is_some_and(|env| env.variables.iter().any(|var| var.name == "baseUrl")) {
+            let base = vars
+                .get("baseUrl")
+                .and_then(|url| reqwest::Url::parse(url).ok())
+                .ok_or("Could not resolve the environment’s baseUrl.")?;
+            if parsed.origin() != base.origin() {
+                return Err("Request does not match the environment’s HTTPS origin.".into());
+            }
         }
         if req
             .http
@@ -261,13 +275,13 @@ pub fn prepare(
         parsed.query_pairs_mut().append_pair(&k, &v);
     }
     // api_key-in-query must be appended before parsed is consumed by request()
-    let mode = req
+    let auth_mode = req
         .http
         .auth_config
         .as_ref()
         .map(|a| a.mode.as_str())
         .unwrap_or("inherit");
-    if mode == "api_key" {
+    if auth_mode == "api_key" {
         if let Some(ac) = &req.http.auth_config {
             if ac.r#in == "query" || ac.r#in.is_empty() {
                 let (val, missing) = substitute(&ac.token, &vars);
@@ -298,7 +312,7 @@ pub fn prepare(
         .headers
         .iter()
         .any(|h| h.enabled != Some(false) && h.name.eq_ignore_ascii_case("authorization"));
-    match mode {
+    match auth_mode {
         "none" => {}
         "bearer" => {
             if !has_auth_header {
@@ -344,7 +358,7 @@ pub fn prepare(
             if !has_auth_header {
                 if let Some(bearer) = vars.get("bearerToken") {
                     rb = rb.header("Authorization", format!("Bearer {}", bearer));
-                } else if allowed_origin.is_some()
+                } else if mode == RequestMode::Mcp
                     && env.is_some_and(|env| {
                         env.variables
                             .iter()

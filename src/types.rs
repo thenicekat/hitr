@@ -145,3 +145,20 @@ pub struct FiredResponse {
     pub is_json: bool,
     pub final_url: String,
 }
+
+#[derive(Clone, Deserialize)]
+pub struct McpHelp {
+    pub status: McpStatus,
+    pub enabled: bool,
+    pub client_config: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum McpStatus {
+    Disabled,
+    Starting,
+    Ready,
+    Error { message: String },
+    Unsupported,
+}

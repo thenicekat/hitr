@@ -1,115 +1,107 @@
 //! Local stdio MCP bridge. The desktop process owns the vault and HTTP client.
 
-use crate::{http, loader, model, vault::VaultState, AppState};
+use crate::{http, model, vault::VaultState, AppState};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock};
 use rmcp::{schemars, tool, tool_router, ServiceExt};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::Semaphore;
-use url::{Origin, Url};
+use tokio::sync::{watch, Semaphore};
 
 const MAX_BODY_BYTES: usize = 128 * 1024;
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Config {
-    grants: Vec<Grant>,
+#[derive(Clone, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub(super) enum Status {
+    Disabled,
+    Starting,
+    Ready,
+    Error { message: String },
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Grant {
-    request_id: String,
-    environment: Option<String>,
-    origin: Url,
-    #[serde(default)]
-    return_body: bool,
+pub(super) struct Access {
+    enabled: Mutex<bool>,
+    revoked: watch::Sender<()>,
 }
 
-struct ApprovedRequest {
-    request: model::Request,
-    environment: Option<model::Env>,
-    origin: Origin,
-    return_body: bool,
-}
-
-impl ApprovedRequest {
-    fn environment_name(&self) -> Option<&str> {
-        self.environment.as_ref().map(|env| env.name.as_str())
-    }
-}
-
-fn resolve_grants(
-    grants: Vec<Grant>,
-    collection: &model::Collection,
-) -> Result<Vec<ApprovedRequest>, String> {
-    let mut approved = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for grant in grants {
-        if grant.origin.scheme() != "https"
-            || grant.origin.path() != "/"
-            || grant.origin.query().is_some()
-            || grant.origin.fragment().is_some()
-            || !grant.origin.username().is_empty()
-            || grant.origin.password().is_some()
-        {
-            return Err(
-                "Each MCP grant needs an HTTPS origin without a path or credentials.".into(),
-            );
+impl Access {
+    fn new(enabled: bool) -> Self {
+        Self {
+            enabled: Mutex::new(enabled),
+            revoked: watch::channel(()).0,
         }
-        if !seen.insert((grant.request_id.clone(), grant.environment.clone())) {
-            return Err("An MCP request and environment pair is listed more than once.".into());
-        }
-        let request = collection
-            .requests
-            .iter()
-            .find(|req| req.id == grant.request_id)
-            .ok_or_else(|| format!("Unknown MCP request: {}", grant.request_id))?;
-        let environment = if let Some(name) = &grant.environment {
-            let mut matches = collection.envs.iter().filter(|env| env.name == *name);
-            let env = matches
-                .next()
-                .filter(|_| matches.next().is_none())
-                .ok_or_else(|| format!("Unknown or ambiguous MCP environment: {name}"))?;
-            Some(env.clone())
-        } else {
-            None
-        };
-        approved.push(ApprovedRequest {
-            request: request.clone(),
-            environment,
-            origin: grant.origin.origin(),
-            return_body: grant.return_body,
-        });
     }
-    Ok(approved)
+
+    pub(super) fn load() -> Self {
+        Self::new(enabled_path().is_ok_and(|path| path.is_file()))
+    }
+
+    pub(super) fn enabled(&self) -> bool {
+        *self.enabled.lock().unwrap()
+    }
+
+    pub(super) fn set_enabled(&self, enabled: bool) -> io::Result<()> {
+        let mut current = self.enabled.lock().unwrap();
+        if *current != enabled {
+            let path = enabled_path()?;
+            if enabled {
+                if let Some(dir) = path.parent() {
+                    std::fs::create_dir_all(dir)?;
+                }
+                OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(false)
+                    .mode(0o600)
+                    .open(path)?;
+            } else {
+                match std::fs::remove_file(path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+                self.revoke();
+            }
+            *current = enabled;
+        }
+        Ok(())
+    }
+
+    pub(super) fn revoke(&self) {
+        self.revoked.send_modify(|_| {});
+    }
 }
 
 #[derive(Clone)]
 struct Broker {
+    access: Arc<Access>,
     vault: Arc<VaultState>,
-    approved: Arc<[ApprovedRequest]>,
+    collection: Arc<Mutex<Option<model::Collection>>>,
     client: reqwest::Client,
     requests: Arc<Semaphore>,
 }
 
+const LOCKED: &str = "Unlock the vault in the Hitr desktop app first.";
+const NO_COLLECTION: &str = "Load a collection in the Hitr desktop app first.";
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Search {
     #[schemars(
-        description = "Words from the saved request name, ID or HTTP method. Empty lists approved requests."
+        description = "Words from the saved request name, ID or HTTP method. Empty lists all saved requests."
     )]
     query: String,
+    #[serde(default)]
+    #[schemars(description = "Search result offset. Use next_offset to retrieve the next page.")]
+    offset: usize,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -118,7 +110,7 @@ struct SendRequest {
     #[schemars(description = "Exact request ID from search_requests.")]
     request_id: String,
     #[schemars(
-        description = "Environment from search_requests, or null for a request approved without one."
+        description = "Exact environment name from search_requests, or null to send without an environment."
     )]
     environment: Option<String>,
 }
@@ -126,96 +118,137 @@ struct SendRequest {
 #[tool_router(server_handler)]
 impl Broker {
     #[tool(
-        description = "Search saved Hitr requests approved for MCP and see their allowed environments."
+        description = "Search saved requests and list environments in Hitr’s active collection. Requires an unlocked vault."
     )]
     fn search_requests(&self, Parameters(input): Parameters<Search>) -> CallToolResult {
-        let query = input.query.to_lowercase();
-        let mut found = self.approved.iter().filter(|item| {
-            let req = &item.request;
-            let matches =
-                format!("{} {} {}", req.info.name, req.id, req.http.method).to_lowercase();
-            query.split_whitespace().all(|word| matches.contains(word))
-        });
-        let requests: Vec<_> = found
-            .by_ref()
-            .take(25)
-            .map(|item| {
-                json!({
-                    "request_id": item.request.id,
-                    "name": item.request.info.name,
-                    "method": item.request.http.method,
-                    "environment": item.environment_name(),
-                })
-            })
-            .collect();
-        CallToolResult::structured(json!({
-            "requests": requests,
-            "more_matches": found.next().is_some(),
-        }))
+        tool_result(self.search(input))
     }
 
     #[tool(
-        description = "Execute an approved saved request with its chosen environment. The request can change remote data."
+        description = "Send a saved request with a chosen environment. Requires an unlocked vault and may change remote data."
     )]
     async fn send_request(&self, Parameters(input): Parameters<SendRequest>) -> CallToolResult {
-        match self.send(input).await {
-            Ok(result) => CallToolResult::structured(result),
-            Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
-        }
+        tool_result(self.send(input).await)
+    }
+}
+
+fn tool_result(result: Result<Value, &'static str>) -> CallToolResult {
+    match result {
+        Ok(result) => CallToolResult::structured(result),
+        Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
     }
 }
 
 impl Broker {
-    async fn send(&self, input: SendRequest) -> Result<Value, &'static str> {
-        let item = self
-            .approved
+    fn check_access(&self) -> Result<(), &'static str> {
+        if !self.access.enabled() {
+            return Err("Enable MCP in the Hitr desktop app first.");
+        }
+        if self.vault.password.lock().unwrap().is_none() {
+            return Err(LOCKED);
+        }
+        Ok(())
+    }
+
+    fn search(&self, input: Search) -> Result<Value, &'static str> {
+        self.check_access()?;
+        let collection = self.collection.lock().unwrap();
+        let collection = collection.as_ref().ok_or(NO_COLLECTION)?;
+        let query = input.query.to_lowercase();
+        let words: Vec<_> = query.split_whitespace().collect();
+        let mut found = collection
+            .requests
             .iter()
-            .find(|item| {
-                item.request.id == input.request_id
-                    && item.environment_name() == input.environment.as_deref()
+            .filter(|req| {
+                let text =
+                    format!("{} {} {}", req.info.name, req.id, req.http.method).to_lowercase();
+                words.iter().all(|word| text.contains(word))
             })
-            .ok_or("Request and environment are not approved. Use search_requests.")?;
+            .skip(input.offset);
+        let requests: Vec<_> = found
+            .by_ref()
+            .take(25)
+            .map(|req| {
+                json!({
+                    "request_id": req.id,
+                    "name": req.info.name,
+                    "method": req.http.method,
+                })
+            })
+            .collect();
+        let next_offset = found.next().map(|_| input.offset + requests.len());
+        let environments: Vec<_> = collection.envs.iter().map(|env| &env.name).collect();
+        Ok(json!({
+            "requests": requests,
+            "environments": environments,
+            "next_offset": next_offset,
+            "more_matches": next_offset.is_some(),
+        }))
+    }
+
+    fn selection(
+        &self,
+        input: &SendRequest,
+    ) -> Result<(model::Request, Option<model::Env>), &'static str> {
+        let collection = self.collection.lock().unwrap();
+        let collection = collection.as_ref().ok_or(NO_COLLECTION)?;
+        let req = collection
+            .requests
+            .iter()
+            .find(|req| req.id == input.request_id)
+            .ok_or("Saved request not found. Use search_requests.")?;
+        let env = if let Some(name) = &input.environment {
+            let mut matches = collection.envs.iter().filter(|env| env.name == *name);
+            let env = matches
+                .next()
+                .filter(|_| matches.next().is_none())
+                .ok_or("Environment is unknown or ambiguous. Use search_requests.")?;
+            Some(env.clone())
+        } else {
+            None
+        };
+        Ok((req.clone(), env))
+    }
+
+    async fn send(&self, input: SendRequest) -> Result<Value, &'static str> {
+        let mut revoked = self.access.revoked.subscribe();
+        self.check_access()?;
         let _permit = self
             .requests
             .try_acquire()
             .map_err(|_| "Hitr is busy. Retry shortly.")?;
-        let uses_vault = item
-            .environment
-            .as_ref()
-            .is_some_and(|env| env.variables.iter().any(|v| v.secret));
+        let (req, env) = self.selection(&input)?;
         let vault = {
             let cache = self.vault.cache.lock().unwrap();
-            if uses_vault && self.vault.password.lock().unwrap().is_none() {
-                return Err("Unlock the vault in the Hitr desktop app first.");
+            if self.vault.password.lock().unwrap().is_none() {
+                return Err(LOCKED);
             }
             cache.clone()
         };
-
-        let request = http::prepare(&self.client, &item.request, item.environment.as_ref(), vault.as_ref(), Some(&item.origin))
-            .map_err(|_| "Hitr could not prepare this request. Check the saved request, environment values and approved origin.")?;
-        let secrets = if item.return_body {
-            response_secrets(&request, vault.as_ref())
-        } else {
-            Vec::new()
+        let request = http::prepare(&self.client, &req, env.as_ref(), vault.as_ref(), http::RequestMode::Mcp)
+            .map_err(|_| "Hitr could not prepare this request. Check its HTTPS URL, environment origin and variables.")?;
+        let secrets = response_secrets(&request, vault.as_ref());
+        let send = async {
+            let start = Instant::now();
+            let response = self
+                .client
+                .execute(request)
+                .await
+                .map_err(|_| "Hitr could not reach the saved API.")?;
+            let status = response.status().as_u16();
+            let body = read_body(response, &secrets).await?;
+            Ok(json!({
+                "status": status,
+                "latency_ms": start.elapsed().as_millis() as u64,
+                "body": body,
+                "body_omitted": body.is_none(),
+            }))
         };
-        let start = Instant::now();
-        let response = self
-            .client
-            .execute(request)
-            .await
-            .map_err(|_| "Hitr could not reach the approved API.")?;
-        let status = response.status().as_u16();
-        let body = if item.return_body {
-            read_body(response, &secrets).await?
-        } else {
-            None
-        };
-        Ok(json!({
-            "status": status,
-            "latency_ms": start.elapsed().as_millis() as u64,
-            "body": body,
-            "body_omitted": body.is_none(),
-        }))
+        tokio::select! {
+            biased;
+            _ = revoked.changed() => Err("MCP access changed while sending the request."),
+            result = send => result,
+        }
     }
 }
 
@@ -311,6 +344,10 @@ fn bridge_dir() -> io::Result<PathBuf> {
     Ok(config.with_file_name("mcp"))
 }
 
+fn enabled_path() -> io::Result<PathBuf> {
+    bridge_dir().map(|dir| dir.with_file_name("mcp-enabled"))
+}
+
 fn listen(dir: &Path) -> io::Result<(File, UnixListener)> {
     match std::fs::DirBuilder::new().mode(0o700).create(dir) {
         Ok(()) => {}
@@ -344,37 +381,25 @@ fn listen(dir: &Path) -> io::Result<(File, UnixListener)> {
 }
 
 pub(super) fn start(app: AppHandle) {
+    {
+        let state = app.state::<AppState>();
+        let mut status = state.mcp_status.lock().unwrap();
+        if !matches!(*status, Status::Disabled | Status::Error { .. }) {
+            return;
+        }
+        *status = Status::Starting;
+    }
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = serve(app).await {
-            eprintln!("Hitr MCP: {error}");
+        if let Err(message) = serve(&app).await {
+            eprintln!("Hitr MCP: {message}");
+            *app.state::<AppState>().mcp_status.lock().unwrap() = Status::Error { message };
         }
     });
 }
 
-async fn serve(app: AppHandle) -> Result<(), String> {
+async fn serve(app: &AppHandle) -> Result<(), String> {
     let dir = bridge_dir().map_err(|e| e.to_string())?;
-    let config_file = dir.with_extension("json");
     let state = app.state::<AppState>();
-    let root = state.root.lock().unwrap().clone();
-    let vault = state.vault.clone();
-    let Some(approved) = tokio::task::spawn_blocking(move || {
-        let raw = match std::fs::read(config_file) {
-            Ok(raw) => raw,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(err.to_string()),
-        };
-        let config: Config = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
-        let collection = loader::load_collection(&root)?;
-        resolve_grants(config.grants, &collection).map(Some)
-    })
-    .await
-    .map_err(|err| err.to_string())??
-    else {
-        return Ok(());
-    };
-    if approved.is_empty() {
-        return Ok(());
-    }
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .no_proxy()
@@ -382,12 +407,14 @@ async fn serve(app: AppHandle) -> Result<(), String> {
         .build()
         .map_err(|err| err.to_string())?;
     let broker = Broker {
-        vault,
-        approved: approved.into(),
+        access: state.mcp_access.clone(),
+        vault: state.vault.clone(),
+        collection: state.collection.clone(),
         client,
         requests: Arc::new(Semaphore::new(4)),
     };
     let (_lock, listener) = listen(&dir).map_err(|err| err.to_string())?;
+    *state.mcp_status.lock().unwrap() = Status::Ready;
     let connections = Arc::new(Semaphore::new(8));
     loop {
         let (stream, _) = listener.accept().await.map_err(|err| err.to_string())?;
@@ -412,7 +439,7 @@ pub fn stdio_bridge() -> io::Result<()> {
         .build()?;
     let result = runtime.block_on(async {
         let stream = UnixStream::connect(bridge_dir()?.join("bridge.sock")).await.map_err(|err| {
-            io::Error::new(err.kind(), format!("Could not connect to Hitr MCP. Configure grants and start the Hitr desktop app. ({err})"))
+            io::Error::new(err.kind(), format!("Could not connect to Hitr MCP. Start the Hitr desktop app and turn on MCP help’s Enable MCP setting. ({err})"))
         })?;
         let (mut incoming, mut outgoing) = stream.into_split();
         let mut stdin = tokio::io::stdin();
@@ -478,30 +505,31 @@ mod tests {
             }],
             ..Default::default()
         };
-        let approved = resolve_grants(
-            vec![Grant {
-                request_id: "widgets/list.yml".into(),
-                environment: Some("sandbox".into()),
-                origin: Url::parse("https://api.example.test").unwrap(),
-                return_body: false,
-            }],
-            &collection,
-        )
-        .unwrap();
+        let vault = Arc::new(VaultState::default());
+        *vault.password.lock().unwrap() =
+            Some(age::secrecy::SecretString::from("fixture".to_owned()));
         Broker {
-            vault: Arc::new(VaultState::default()),
-            approved: approved.into(),
+            access: Arc::new(Access::new(true)),
+            vault,
+            collection: Arc::new(Mutex::new(Some(collection))),
             client: reqwest::Client::new(),
             requests: Arc::new(Semaphore::new(1)),
         }
     }
 
     #[tokio::test]
-    async fn mcp_advertises_two_tools_and_blocks_unapproved_or_locked_requests() {
+    async fn mcp_lists_the_collection_and_blocks_calls_when_locked() {
         let (client, server) = UnixStream::pair().unwrap();
         let broker = fixture();
+        let server_broker = broker.clone();
         let session = tokio::spawn(async move {
-            broker.serve(server).await.unwrap().waiting().await.unwrap();
+            server_broker
+                .serve(server)
+                .await
+                .unwrap()
+                .waiting()
+                .await
+                .unwrap();
         });
         let (incoming, mut outgoing) = client.into_split();
         let mut responses = BufReader::new(incoming).lines();
@@ -513,8 +541,17 @@ mod tests {
             json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_requests","arguments":{"query":"get widgets"}}}),
             json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"send_request","arguments":{"request_id":"widgets/list.yml","environment":"other"}}}),
             json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"send_request","arguments":{"request_id":"widgets/list.yml","environment":"sandbox"}}}),
+            json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"search_requests","arguments":{"query":""}}}),
+            json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"search_requests","arguments":{"query":""}}}),
         ];
         for message in messages {
+            if message["id"] == 5 {
+                *broker.vault.password.lock().unwrap() = None;
+                broker.access.revoke();
+            }
+            if message["id"] == 7 {
+                *broker.access.enabled.lock().unwrap() = false;
+            }
             outgoing
                 .write_all(format!("{message}\n").as_bytes())
                 .await
@@ -541,16 +578,20 @@ mod tests {
                 3 => {
                     let requests = &result["structuredContent"]["requests"];
                     assert_eq!(requests[0]["request_id"], "widgets/list.yml");
-                    assert_eq!(requests[0]["environment"], "sandbox");
+                    assert_eq!(result["structuredContent"]["environments"][0], "sandbox");
                     assert!(!reply.to_string().contains("api.example.test"));
                 }
                 4 => {
                     assert_eq!(result["isError"], true);
-                    assert!(result.to_string().contains("not approved"));
+                    assert!(result.to_string().contains("Environment is unknown"));
                 }
-                5 => {
+                5 | 6 => {
                     assert_eq!(result["isError"], true);
                     assert!(result.to_string().contains("Unlock the vault"));
+                }
+                7 => {
+                    assert_eq!(result["isError"], true);
+                    assert!(result.to_string().contains("Enable MCP"));
                 }
                 _ => unreachable!(),
             }
@@ -563,11 +604,43 @@ mod tests {
             .unwrap();
     }
 
+    #[tokio::test]
+    async fn vault_lock_cancels_an_in_flight_mcp_call() {
+        let broker = fixture();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        {
+            let mut collection = broker.collection.lock().unwrap();
+            collection.as_mut().unwrap().requests[0].http.url =
+                format!("https://{}/widgets", listener.local_addr().unwrap());
+        }
+        let mut send = Box::pin(broker.send(SendRequest {
+            request_id: "widgets/list.yml".into(),
+            environment: None,
+        }));
+        // Hold the connection before completing TLS so access can be revoked
+        // with an outbound call still pending.
+        let (_connection, _) = tokio::select! {
+            result = &mut send => panic!("request finished before cancellation: {result:?}"),
+            accepted = tokio::time::timeout(Duration::from_secs(3), listener.accept()) =>
+                accepted.unwrap().unwrap(),
+        };
+        *broker.vault.password.lock().unwrap() = None;
+        broker.access.revoke();
+        assert_eq!(
+            send.await,
+            Err("MCP access changed while sending the request.")
+        );
+    }
+
     #[test]
     fn request_origin_is_checked_before_using_the_vault() {
         let broker = fixture();
-        let item = &broker.approved[0];
-        let env = item.environment.as_ref().unwrap();
+        let collection = broker.collection.lock().unwrap();
+        let collection = collection.as_ref().unwrap();
+        let req = &collection.requests[0];
+        let env = &collection.envs[0];
         let mut vault = crate::vault::VaultData::default();
         crate::vault::set_in(
             &mut vault,
@@ -577,10 +650,10 @@ mod tests {
         );
         let request = http::prepare(
             &broker.client,
-            &item.request,
+            req,
             Some(env),
             Some(&vault),
-            Some(&item.origin),
+            http::RequestMode::Mcp,
         )
         .unwrap();
         assert_eq!(
@@ -588,17 +661,17 @@ mod tests {
             "Bearer example-fixture-token"
         );
 
-        let mut env = env.clone();
-        env.variables[0].value = "https://other.example.test".into();
+        let mut req = req.clone();
+        req.http.url = "https://other.example.test/widgets".into();
         let err = http::prepare(
             &broker.client,
-            &item.request,
-            Some(&env),
+            &req,
+            Some(env),
             Some(&vault),
-            Some(&item.origin),
+            http::RequestMode::Mcp,
         )
         .unwrap_err();
-        assert!(err.contains("approved HTTPS origin"));
+        assert!(err.contains("environment’s HTTPS origin"));
         assert!(!err.contains("example-fixture-token"));
     }
 

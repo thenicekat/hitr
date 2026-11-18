@@ -7,6 +7,7 @@
 
 mod api;
 mod app;
+mod mcp_help;
 mod types;
 
 use app::App;

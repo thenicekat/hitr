@@ -553,3 +553,37 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .requests .row-meta { max-width: 34%; }
 
 .modal input[type="checkbox"] { width: auto; min-height: 0; flex: none; }
+
+.mcp-help {
+  position: fixed;
+  inset: 64px 12px auto auto;
+  z-index: 140;
+  width: min(480px, calc(100vw - 24px));
+  max-height: calc(100vh - 76px);
+  overflow: auto;
+  padding: 18px 20px;
+  color: var(--fg);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.mcp-help-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.mcp-help h2 { margin: 0; font-size: 18px; }
+.mcp-help h3 { margin: 0; font-size: 14px; }
+.mcp-help p { margin: 8px 0; color: var(--fg-dim); line-height: 1.5; }
+.mcp-help strong { color: var(--fg); }
+.mcp-help .error { color: var(--err); }
+.mcp-help section { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 14px; }
+.mcp-help summary { margin-top: 8px; padding: 5px 0; cursor: pointer; }
+.mcp-help code, .mcp-help pre { user-select: text; font-size: 12px; }
+.mcp-help code { overflow-wrap: anywhere; }
+.mcp-snippet {
+  color: var(--fg);
+  background: var(--bg);
+  border-radius: 4px;
+  padding: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 6px 0 10px;
+}
+.mcp-enable { display: flex; align-items: center; gap: 8px; margin-top: 12px; }

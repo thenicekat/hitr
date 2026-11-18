@@ -39,8 +39,8 @@
 
 #![allow(non_snake_case)]
 
-use crate::api;
 use crate::types::*;
+use crate::{api, mcp_help::McpHelpPanel};
 use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
@@ -260,8 +260,24 @@ pub fn App() -> Element {
     let mut firing = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
     let mut modal = use_signal(|| Modal::None);
-    let mut root = use_signal(String::new);
     let mut vault_locked = use_signal(|| true);
+    let mut mcp_help_open = use_signal(|| false);
+    let close_mcp_help = move |_| {
+        mcp_help_open.set(false);
+        let id = if *vault_locked.peek() {
+            "mcp-help-vault"
+        } else {
+            "mcp-help-toolbar"
+        };
+        if let Some(button) = web_sys::window()
+            .and_then(|window| window.document())
+            .and_then(|document| document.get_element_by_id(id))
+            .and_then(|element| element.dyn_into::<web_sys::HtmlElement>().ok())
+        {
+            let _ = button.focus();
+        }
+    };
+    let mut root = use_signal(String::new);
     let mut vault_exists = use_signal(|| true);
     let mut editing_root = use_signal(|| false);
     let mut root_input = use_signal(String::new);
@@ -464,6 +480,14 @@ pub fn App() -> Element {
                     span { class: "error", "{e}" }
                 }
                 if !*vault_locked.read() {
+                    button {
+                        id: "mcp-help-toolbar",
+                        class: "btn ghost",
+                        aria_expanded: *mcp_help_open.read(),
+                        aria_controls: "mcp-help",
+                        onclick: move |_| mcp_help_open.toggle(),
+                        "MCP help"
+                    }
                     button {
                         class: "btn icon ghost",
                         title: "lock vault",
@@ -717,11 +741,17 @@ pub fn App() -> Element {
             if *vault_locked.read() {
                 UnlockModal {
                     exists: *vault_exists.read(),
+                    mcp_help_open: *mcp_help_open.read(),
+                    on_help: move |_| mcp_help_open.toggle(),
                     on_unlocked: move |_| {
                         vault_locked.set(false);
                         vault_exists.set(true);
                     },
                 }
+            }
+
+            if *mcp_help_open.read() {
+                McpHelpPanel { on_close: close_mcp_help, vault_locked: *vault_locked.read() }
             }
 
             if let Some(msg) = toast.read().as_ref() {
@@ -732,7 +762,12 @@ pub fn App() -> Element {
 }
 
 #[component]
-fn UnlockModal(exists: bool, on_unlocked: EventHandler<()>) -> Element {
+fn UnlockModal(
+    exists: bool,
+    on_unlocked: EventHandler<()>,
+    on_help: EventHandler<()>,
+    mcp_help_open: bool,
+) -> Element {
     let mut password = use_signal(String::new);
     let mut confirm = use_signal(String::new);
     let mut err = use_signal(|| None::<String>);
@@ -797,6 +832,14 @@ fn UnlockModal(exists: bool, on_unlocked: EventHandler<()>) -> Element {
                 }
                 if let Some(e) = err.read().as_ref() { div { class: "error", "{e}" } }
                 div { class: "modal-actions",
+                    button {
+                        id: "mcp-help-vault",
+                        class: "btn ghost",
+                        aria_expanded: mcp_help_open,
+                        aria_controls: "mcp-help",
+                        onclick: move |_| on_help.call(()),
+                        "MCP help"
+                    }
                     button { class: "btn primary", disabled: *unlocking.read(), onclick: move |_| submit(),
                         if *unlocking.read() { "Unlocking…" } else if exists { "unlock" } else { "create" }
                     }

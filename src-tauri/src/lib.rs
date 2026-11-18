@@ -36,8 +36,12 @@ use tauri_plugin_dialog::DialogExt;
 
 struct AppState {
     root: Mutex<PathBuf>,
-    collection: Mutex<Option<Collection>>,
+    collection: Arc<Mutex<Option<Collection>>>,
     vault: Arc<VaultState>,
+    #[cfg(unix)]
+    mcp_status: Mutex<mcp::Status>,
+    #[cfg(unix)]
+    mcp_access: Arc<mcp::Access>,
 }
 
 fn require_password(state: &AppState) -> Result<SecretString, String> {
@@ -95,17 +99,26 @@ fn set_root(state: State<AppState>, root: String) -> Result<(), String> {
         return Err(format!("not a directory: {}", root));
     }
     write_root_to_config(&p)?;
-    *state.root.lock().unwrap() = p;
-    *state.collection.lock().unwrap() = None;
+    let mut active_root = state.root.lock().unwrap();
+    let mut collection = state.collection.lock().unwrap();
+    *active_root = p;
+    *collection = None;
+    #[cfg(unix)]
+    state.mcp_access.revoke();
     Ok(())
 }
 
 #[tauri::command]
 async fn load(state: State<'_, AppState>) -> Result<Collection, String> {
     let root = state.root.lock().unwrap().clone();
-    let c = tokio::task::spawn_blocking(move || loader::load_collection(&root))
+    let load_root = root.clone();
+    let c = tokio::task::spawn_blocking(move || loader::load_collection(&load_root))
         .await
         .map_err(|e| e.to_string())??;
+    let active_root = state.root.lock().unwrap();
+    if *active_root != root {
+        return Err("Collection changed while loading. Refresh and try again.".into());
+    }
     *state.collection.lock().unwrap() = Some(c.clone());
     Ok(c)
 }
@@ -115,6 +128,64 @@ fn vault_status(state: State<AppState>) -> serde_json::Value {
     let unlocked = state.vault.password.lock().unwrap().is_some();
     let exists = vault::vault_exists();
     serde_json::json!({ "unlocked": unlocked, "exists": exists })
+}
+
+#[tauri::command]
+fn mcp_help(state: State<'_, AppState>) -> serde_json::Value {
+    #[cfg(unix)]
+    {
+        let enabled = state.mcp_access.enabled();
+        let status = if enabled {
+            state.mcp_status.lock().unwrap().clone()
+        } else {
+            mcp::Status::Disabled
+        };
+        let executable = std::env::current_exe()
+            .ok()
+            .and_then(|path| path.into_os_string().into_string().ok());
+        let client_config = executable.map(|command| {
+            serde_json::to_string_pretty(&serde_json::json!({
+                "mcpServers": {
+                    "hitr": { "command": command, "args": ["mcp"] }
+                }
+            }))
+            .expect("Hitr MCP client configuration is serializable")
+        });
+        serde_json::json!({
+            "status": status,
+            "enabled": enabled,
+            "client_config": client_config
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = state;
+        serde_json::json!({"status": {"state": "unsupported"}, "enabled": false})
+    }
+}
+
+#[tauri::command]
+fn set_mcp_enabled(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        state
+            .mcp_access
+            .set_enabled(enabled)
+            .map_err(|error| format!("Could not save the MCP setting: {error}"))?;
+        if enabled {
+            mcp::start(app);
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (app, state, enabled);
+        Err("MCP is unavailable on this platform.".into())
+    }
 }
 
 #[tauri::command]
@@ -141,6 +212,8 @@ fn vault_lock(state: State<AppState>) {
     let mut cache = state.vault.cache.lock().unwrap();
     *state.vault.password.lock().unwrap() = None;
     *cache = None;
+    #[cfg(unix)]
+    state.mcp_access.revoke();
 }
 
 #[tauri::command]
@@ -593,11 +666,17 @@ pub fn run() {
         .setup(move |app| {
             app.manage(AppState {
                 root: Mutex::new(root.clone()),
-                collection: Mutex::new(None),
+                collection: Arc::new(Mutex::new(None)),
                 vault: Arc::new(VaultState::default()),
+                #[cfg(unix)]
+                mcp_status: Mutex::new(mcp::Status::Disabled),
+                #[cfg(unix)]
+                mcp_access: Arc::new(mcp::Access::load()),
             });
             #[cfg(unix)]
-            mcp::start(app.handle().clone());
+            if app.state::<AppState>().mcp_access.enabled() {
+                mcp::start(app.handle().clone());
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -605,6 +684,8 @@ pub fn run() {
             set_root,
             load,
             vault_status,
+            mcp_help,
+            set_mcp_enabled,
             vault_unlock,
             vault_lock,
             get_secret,

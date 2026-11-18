@@ -106,6 +106,18 @@ pub struct VaultStatus {
 pub async fn vault_status() -> Result<VaultStatus, String> {
     call("vault_status", Empty {}).await
 }
+pub async fn mcp_help() -> Result<McpHelp, String> {
+    call("mcp_help", Empty {}).await
+}
+
+pub async fn set_mcp_enabled(enabled: bool) -> Result<(), String> {
+    #[derive(Serialize)]
+    struct Args {
+        enabled: bool,
+    }
+    call_unit("set_mcp_enabled", Args { enabled }).await
+}
+
 pub async fn vault_unlock(password: &str) -> Result<(), String> {
     call_unit("vault_unlock", UnlockArgs { password }).await
 }
