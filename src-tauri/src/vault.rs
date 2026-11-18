@@ -71,15 +71,53 @@ pub fn read_encrypted(password: &SecretString) -> Result<VaultData, String> {
         return Ok(VaultData::default());
     }
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-    let dec = age::Decryptor::new(&bytes[..]).map_err(|e| format!("decrypt init: {}", e))?;
-    let identity = age::scrypt::Identity::new(password.clone());
-    let mut reader = dec
-        .decrypt(std::iter::once(&identity as &dyn age::Identity))
-        .map_err(|e| format!("wrong password or corrupt vault: {}", e))?;
-    let mut plaintext = Vec::new();
-    reader
-        .read_to_end(&mut plaintext)
-        .map_err(|e| e.to_string())?;
+    decrypt_vault(&bytes, password)
+}
+
+// A vault created on a faster machine (or in a release build) can exceed
+// age's machine-calibrated default when opened in a debug build. Retry only
+// up to a fixed memory/CPU ceiling; higher factors stay rejected.
+const MAX_COMPAT_WORK_FACTOR: u8 = 19;
+
+fn decrypt_vault(bytes: &[u8], password: &SecretString) -> Result<VaultData, String> {
+    decrypt_vault_with_limit(bytes, password, None)
+}
+
+fn decrypt_vault_with_limit(
+    bytes: &[u8],
+    password: &SecretString,
+    initial_limit: Option<u8>,
+) -> Result<VaultData, String> {
+    let decrypt = |identity: &age::scrypt::Identity| -> Result<Vec<u8>, age::DecryptError> {
+        let dec = age::Decryptor::new(bytes)?;
+        let mut reader = dec.decrypt(std::iter::once(identity as &dyn age::Identity))?;
+        let mut plaintext = Vec::new();
+        reader.read_to_end(&mut plaintext)?;
+        Ok(plaintext)
+    };
+    let mut identity = age::scrypt::Identity::new(password.clone());
+    if let Some(limit) = initial_limit {
+        identity.set_max_work_factor(limit);
+    }
+    let plaintext = match decrypt(&identity) {
+        Err(age::DecryptError::ExcessiveWork { required, .. })
+            if required <= MAX_COMPAT_WORK_FACTOR =>
+        {
+            let mut identity = age::scrypt::Identity::new(password.clone());
+            identity.set_max_work_factor(MAX_COMPAT_WORK_FACTOR);
+            decrypt(&identity)
+        }
+        result => result,
+    }
+    .map_err(|e| match e {
+        age::DecryptError::ExcessiveWork { .. } => {
+            "Vault requires too much work to unlock on this device.".to_string()
+        }
+        age::DecryptError::DecryptionFailed
+        | age::DecryptError::NoMatchingKeys
+        | age::DecryptError::InvalidMac => "Wrong password or corrupt vault.".to_string(),
+        other => format!("Could not unlock vault: {other}"),
+    })?;
     if plaintext.is_empty() {
         return Ok(VaultData::default());
     }
@@ -143,4 +181,55 @@ pub fn rename_env_in(data: &mut VaultData, old_env: &str, new_env: &str) {
 pub fn delete_env_in(data: &mut VaultData, env: &str) {
     let prefix = format!("{}/", env);
     data.secrets.retain(|k, _| !k.starts_with(&prefix));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn encrypted_fixture(factor: u8) -> (Vec<u8>, SecretString) {
+        let password = SecretString::from("test password".to_string());
+        let mut recipient = age::scrypt::Recipient::new(password.clone());
+        recipient.set_work_factor(factor);
+        let encryptor =
+            age::Encryptor::with_recipients(std::iter::once(&recipient as &dyn age::Recipient))
+                .unwrap();
+        let mut bytes = Vec::new();
+        let mut writer = encryptor.wrap_output(&mut bytes).unwrap();
+        writer
+            .write_all(br#"{"secrets":{"dev/token":"fixture"}}"#)
+            .unwrap();
+        writer.finish().unwrap();
+        (bytes, password)
+    }
+
+    #[test]
+    fn unlock_retries_within_compatibility_limit() {
+        let (bytes, password) = encrypted_fixture(8);
+        let data = decrypt_vault_with_limit(&bytes, &password, Some(7)).unwrap();
+        assert_eq!(get_from(&data, "dev", "token").as_deref(), Some("fixture"));
+        assert!(decrypt_vault(&bytes, &SecretString::from("wrong".to_string())).is_err());
+    }
+
+    #[test]
+    fn unlock_rejects_excessive_work() {
+        let (bytes, password) = encrypted_fixture(8);
+        let header_end = bytes.iter().position(|b| *b == b'\n').unwrap();
+        let stanza_end = bytes[header_end + 1..]
+            .iter()
+            .position(|b| *b == b'\n')
+            .unwrap()
+            + header_end
+            + 1;
+        let mut header = String::from_utf8(bytes[header_end + 1..stanza_end].to_vec()).unwrap();
+        assert!(header.ends_with(" 8"));
+        header.truncate(header.len() - 2);
+        header.push_str(" 20");
+        let mut modified = bytes[..header_end + 1].to_vec();
+        modified.extend_from_slice(header.as_bytes());
+        modified.extend_from_slice(&bytes[stanza_end..]);
+        assert!(
+            matches!(decrypt_vault_with_limit(&modified, &password, Some(7)), Err(error) if error.contains("too much work"))
+        );
+    }
 }

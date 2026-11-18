@@ -116,14 +116,20 @@ fn vault_status(state: State<AppState>) -> serde_json::Value {
 }
 
 #[tauri::command]
-fn vault_unlock(state: State<AppState>, password: String) -> Result<(), String> {
+async fn vault_unlock(state: State<'_, AppState>, password: String) -> Result<(), String> {
     let secret = SecretString::from(password);
-    // verify: try decrypt if vault exists; else accept and let first save create it
-    if vault::vault_exists() {
-        vault::read_encrypted(&secret)?;
-    }
+    let password_for_worker = secret.clone();
+    let data = tokio::task::spawn_blocking(move || {
+        if vault::vault_exists() {
+            vault::read_encrypted(&password_for_worker).map(Some)
+        } else {
+            Ok(None)
+        }
+    })
+    .await
+    .map_err(|_| "Vault unlock task failed.".to_string())??;
     *state.vault.password.lock().unwrap() = Some(secret);
-    *state.vault.cache.lock().unwrap() = None;
+    *state.vault.cache.lock().unwrap() = data;
     Ok(())
 }
 

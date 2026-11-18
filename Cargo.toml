@@ -19,3 +19,16 @@ console_error_panic_hook = "0.1"
 
 [workspace]
 members = ["src-tauri"]
+
+# Password derivation is prohibitively slow without optimization in dev builds.
+# This affects performance only; the vault's scrypt parameters stay unchanged.
+[profile.dev.package.scrypt]
+opt-level = 3
+[profile.dev.package.salsa20]
+opt-level = 3
+[profile.dev.package.pbkdf2]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3
+[profile.dev.package.hmac]
+opt-level = 3

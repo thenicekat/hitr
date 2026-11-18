@@ -716,8 +716,12 @@ fn UnlockModal(exists: bool, on_unlocked: EventHandler<()>) -> Element {
     let mut password = use_signal(String::new);
     let mut confirm = use_signal(String::new);
     let mut err = use_signal(|| None::<String>);
+    let mut unlocking = use_signal(|| false);
 
     let mut submit = move || {
+        if *unlocking.peek() {
+            return;
+        }
         let pw = password.read().clone();
         let cf = confirm.read().clone();
         if pw.is_empty() {
@@ -728,11 +732,14 @@ fn UnlockModal(exists: bool, on_unlocked: EventHandler<()>) -> Element {
             err.set(Some("passwords don't match".into()));
             return;
         }
+        unlocking.set(true);
+        err.set(None);
         spawn(async move {
             match api::vault_unlock(&pw).await {
                 Ok(_) => on_unlocked.call(()),
                 Err(e) => err.set(Some(e)),
             }
+            unlocking.set(false);
         });
     };
 
@@ -770,8 +777,8 @@ fn UnlockModal(exists: bool, on_unlocked: EventHandler<()>) -> Element {
                 }
                 if let Some(e) = err.read().as_ref() { div { class: "error", "{e}" } }
                 div { class: "modal-actions",
-                    button { class: "btn primary", onclick: move |_| submit(),
-                        if exists { "unlock" } else { "create" }
+                    button { class: "btn primary", disabled: *unlocking.read(), onclick: move |_| submit(),
+                        if *unlocking.read() { "Unlocking…" } else if exists { "unlock" } else { "create" }
                     }
                 }
             }
