@@ -6,6 +6,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Match the Dioxus framework version in Cargo.lock and update both checksums together.
+  DX_VERSION: "0.7.9"
 
 permissions:
   contents: write
@@ -17,9 +19,13 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
+            runner: macos-15
+            dx_sha256: "970c72255aa8f1fb4f56e4e0c1e702de35adee69b0df663182ae1400bca43590"
           - target: x86_64-apple-darwin
+            runner: macos-15-intel
+            dx_sha256: "7803824bfbf5babf94f5a3b898f6b6ba5a507e43b906482d1e729e78e40d753b"
 
-    runs-on: macos-latest
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - uses: actions/checkout@v4
@@ -29,20 +35,35 @@ jobs:
         with:
           targets: wasm32-unknown-unknown,${{ matrix.target }}
 
-      - name: Install dioxus-cli
-        uses: baptiste0928/cargo-install@v3
-        with:
-          crate: dioxus-cli
-          version: "^0.7"
-          locked: true
+      - name: Install Dioxus CLI
+        env:
+          DX_TARGET: ${{ matrix.target }}
+          DX_SHA256: ${{ matrix.dx_sha256 }}
+        run: |
+          # The native Dioxus binaries use Homebrew's OpenSSL shared libraries.
+          ssl_lib="$(brew --prefix openssl@3)/lib"
+          if [ ! -r "$ssl_lib/libssl.3.dylib" ] || [ ! -r "$ssl_lib/libcrypto.3.dylib" ]; then
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install openssl@3
+          fi
+          dx_dir="$RUNNER_TEMP/dioxus"
+          archive="$dx_dir/dx.tar.gz"
+          mkdir -p "$dx_dir"
+          curl --fail --silent --show-error --location --retry 3 \
+            "https://github.com/DioxusLabs/dioxus/releases/download/v${DX_VERSION}/dx-${DX_TARGET}.tar.gz" \
+            --output "$archive"
+          printf '%s  %s\n' "$DX_SHA256" "$archive" | shasum -a 256 --check
+          tar -xzf "$archive" -C "$dx_dir" dx
+          "$dx_dir/dx" --version
+          echo "$dx_dir" >> "$GITHUB_PATH"
 
-      - uses: actions/cache@v4
+      - name: Restore Cargo sources from the default branch
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          key: macOS-cargo-sources-${{ hashFiles('Cargo.lock') }}
+          restore-keys: macOS-cargo-sources-
 
       - uses: tauri-apps/tauri-action@v0
         env:

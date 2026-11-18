@@ -19,13 +19,21 @@ jobs:
           components: clippy, rustfmt
           targets: wasm32-unknown-unknown
 
-      - uses: actions/cache@v4
+      - name: Cache Cargo sources
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-check-${{ hashFiles('**/Cargo.lock') }}
+          key: macOS-cargo-sources-${{ hashFiles('Cargo.lock') }}
+          restore-keys: macOS-cargo-sources-
+
+      - name: Cache compiled checks
+        uses: actions/cache@v5
+        with:
+          path: target
+          key: macOS-${{ runner.arch }}-cargo-check-${{ hashFiles('Cargo.lock') }}
+          restore-keys: macOS-${{ runner.arch }}-cargo-check-
 
       - name: Format check
         run: cargo fmt --all -- --check
