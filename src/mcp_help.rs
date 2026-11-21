@@ -5,7 +5,8 @@ use wasm_bindgen_futures::JsFuture;
 #[component]
 pub fn McpHelpPanel(on_close: EventHandler<()>, vault_locked: bool) -> Element {
     let mut status = use_signal(|| None::<Result<McpHelp, String>>);
-    let mut copy_feedback = use_signal(|| None::<&'static str>);
+    let mut config_open = use_signal(|| false);
+    let mut copy_result = use_signal(|| None::<bool>);
     let mut saving = use_signal(|| false);
     let mut settings_error = use_signal(|| None::<String>);
     let refresh = use_callback(move |()| {
@@ -17,6 +18,21 @@ pub fn McpHelpPanel(on_close: EventHandler<()>, vault_locked: bool) -> Element {
     use_hook(move || refresh.call(()));
 
     let result = status.read();
+    let help = result.as_ref().and_then(|result| result.as_ref().ok());
+    let enabled = help
+        .filter(|help| !matches!(help.status, McpStatus::Unsupported))
+        .map(|help| help.enabled);
+    let (state, label) = match help.map(|help| &help.status) {
+        Some(McpStatus::Ready) if vault_locked => ("paused", "Vault locked"),
+        Some(McpStatus::Ready) => ("ready", "Ready"),
+        Some(McpStatus::Starting) => ("paused", "Starting…"),
+        Some(McpStatus::Disabled) => ("off", "Off"),
+        Some(McpStatus::Error { .. }) => ("failed", "Couldn’t start"),
+        Some(McpStatus::Unsupported) => ("off", "Unavailable on this platform"),
+        None if result.is_none() => ("off", "Checking…"),
+        None => ("failed", "Status unavailable"),
+    };
+
     rsx! {
         aside {
             id: "mcp-help",
@@ -31,107 +47,119 @@ pub fn McpHelpPanel(on_close: EventHandler<()>, vault_locked: bool) -> Element {
                     on_close.call(());
                 }
             },
-            header { class: "mcp-help-heading",
-                h2 { id: "mcp-help-title", "MCP for agents" }
+            header { class: "mcp-panel-header",
+                h2 { id: "mcp-help-title", "MCP" }
                 button {
-                    class: "btn ghost",
+                    class: "btn icon mcp-close",
+                    aria_label: "Close MCP",
+                    title: "Close",
                     onmounted: move |element| async move {
                         let _ = element.data().set_focus(true).await;
                     },
                     onclick: move |_| on_close.call(()),
-                    "Close"
+                    "×"
                 }
             }
-            p { "While the vault is unlocked, local MCP clients can search and send every saved request using any environment in the open collection, including production." }
-            section {
-                div { class: "mcp-help-heading",
-                    h3 { "Status" }
-                    button { class: "btn small ghost", disabled: result.is_none() || *saving.read(), onclick: move |_| refresh.call(()), "Refresh" }
-                }
-                div { role: "status",
-                    match result.as_ref() {
-                        None => rsx! { p { "Checking MCP status…" } },
-                        Some(Err(_)) => rsx! { p { class: "error", "Couldn’t read MCP status. Try refreshing." } },
-                        Some(Ok(help)) => rsx! {
-                            match &help.status {
-                                McpStatus::Starting => rsx! { p { "MCP is starting. Refresh in a moment." } },
-                                McpStatus::Disabled => rsx! { p { "MCP is disabled." } },
-                                McpStatus::Ready if vault_locked => rsx! { p { "Vault locked. MCP search and send are paused." } },
-                                McpStatus::Ready => rsx! { p { "Vault unlocked. MCP clients can search and send saved requests." } },
-                                McpStatus::Error { message } => rsx! {
-                                    p { class: "error", "MCP could not start." }
-                                    p { "{message} Restart Hitr after fixing the issue." }
-                                },
-                                McpStatus::Unsupported => rsx! { p { "MCP is unavailable on this platform." } },
+            div { class: "mcp-access",
+                div { class: "mcp-access-row",
+                    div {
+                        if enabled.is_some() {
+                            label { r#for: "mcp-enabled", "Enable MCP" }
+                        }
+                        div { class: "mcp-status mcp-status-{state}", role: "status",
+                            span { class: "mcp-status-dot", aria_hidden: "true" }
+                            if *saving.read() { "Saving…" } else { "{label}" }
+                        }
+                    }
+                    if let Some(enabled) = enabled {
+                        input {
+                            id: "mcp-enabled",
+                            class: "mcp-switch",
+                            r#type: "checkbox",
+                            role: "switch",
+                            aria_describedby: "mcp-access-scope",
+                            checked: enabled,
+                            disabled: *saving.read(),
+                            onchange: move |event| {
+                                let enabled = event.checked();
+                                saving.set(true);
+                                settings_error.set(None);
+                                spawn(async move {
+                                    if let Err(error) = api::set_mcp_enabled(enabled).await {
+                                        settings_error.set(Some(error));
+                                    }
+                                    status.set(Some(api::mcp_help().await));
+                                    saving.set(false);
+                                });
                             }
                         }
                     }
                 }
-                if let Some(Ok(help)) = result.as_ref() {
-                    if !matches!(help.status, McpStatus::Unsupported) {
-                        label { class: "mcp-enable",
-                            input {
-                                r#type: "checkbox",
-                                checked: help.enabled,
-                                disabled: *saving.read(),
-                                onchange: move |event| {
-                                    let enabled = event.checked();
-                                    saving.set(true);
-                                    settings_error.set(None);
-                                    spawn(async move {
-                                        if let Err(error) = api::set_mcp_enabled(enabled).await {
-                                            settings_error.set(Some(error));
-                                        }
-                                        saving.set(false);
-                                        refresh.call(());
-                                    });
-                                }
-                            }
-                            "Enable MCP"
-                        }
-                    }
+                if let Some(McpStatus::Error { message }) = help.map(|help| &help.status) {
+                    p { class: "mcp-error", "{message} Restart Hitr after fixing the issue." }
+                }
+                if state == "failed" || matches!(help.map(|help| &help.status), Some(McpStatus::Starting)) {
+                    button { class: "btn small ghost", disabled: *saving.read(), onclick: move |_| refresh.call(()), "Refresh status" }
                 }
                 if let Some(error) = settings_error.read().as_ref() {
-                    p { role: "alert", class: "error", "{error}" }
+                    p { role: "alert", class: "mcp-error", "{error}" }
+                }
+                if enabled.is_some() {
+                    p { id: "mcp-access-scope", class: "mcp-hint", "While the vault is unlocked, local clients can use saved requests in all environments, including production." }
                 }
             }
-            if let Some(Ok(help)) = result.as_ref() {
-                if let Some(config) = help.client_config.as_ref() {
-                    section {
-                        h3 { "Connect an MCP client" }
-                        p { "Add Hitr to your MCP client’s configuration and restart the client. Keep Hitr open with the vault unlocked, then try searching for a saved request." }
-                        button {
-                            class: "btn mcp-copy",
-                            aria_label: "Copy configuration",
-                            title: "Copy configuration",
-                            onclick: {
-                                let config = config.clone();
-                                move |_| {
-                                    let Some(window) = web_sys::window() else {
-                                        copy_feedback.set(Some("Copy unavailable. Select the configuration text to copy it."));
-                                        return;
-                                    };
-                                    let write = window.navigator().clipboard().write_text(&config);
-                                    spawn(async move {
-                                        let message = if JsFuture::from(write).await.is_ok() {
-                                            "Client configuration copied."
-                                        } else {
-                                            "Copy unavailable. Select the configuration text to copy it."
+            if let Some(config) = help.and_then(|help| help.client_config.as_ref()) {
+                section { class: "mcp-setup",
+                    div { class: "mcp-config",
+                        div { class: "mcp-config-bar",
+                            button {
+                                class: "btn mcp-disclosure",
+                                aria_expanded: *config_open.read(),
+                                aria_controls: "mcp-config-json",
+                                onclick: move |_| config_open.toggle(),
+                                span { class: "mcp-chevron", aria_hidden: "true" }
+                                "Client configuration"
+                            }
+                            span { class: "mcp-copied", role: "status",
+                                if *copy_result.read() == Some(true) { "Copied" }
+                            }
+                            button {
+                                class: "btn mcp-copy",
+                                aria_label: "Copy configuration",
+                                title: "Copy configuration",
+                                onclick: {
+                                    let config = config.clone();
+                                    move |_| {
+                                        let Some(window) = web_sys::window() else {
+                                            copy_result.set(Some(false));
+                                            config_open.set(true);
+                                            return;
                                         };
-                                        copy_feedback.set(Some(message));
-                                    });
-                                }
-                            },
-                            span { class: "copy-icon", aria_hidden: "true" }
+                                        let write = window.navigator().clipboard().write_text(&config);
+                                        spawn(async move {
+                                            let copied = JsFuture::from(write).await.is_ok();
+                                            copy_result.set(Some(copied));
+                                            if !copied {
+                                                config_open.set(true);
+                                            }
+                                        });
+                                    }
+                                },
+                                span { class: "copy-icon", aria_hidden: "true" }
+                            }
                         }
-                        if let Some(message) = *copy_feedback.read() {
-                            p { role: "status", "{message}" }
-                        }
-                        details {
-                            summary { "Client configuration" }
-                            pre { class: "mcp-snippet", "{config}" }
+                        pre {
+                            id: "mcp-config-json",
+                            class: "mcp-snippet",
+                            hidden: !*config_open.read(),
+                            tabindex: "0",
+                            "{config}"
                         }
                     }
+                    if *copy_result.read() == Some(false) {
+                        p { role: "alert", class: "mcp-error", "Copy failed. Select the JSON to copy it manually." }
+                    }
+                    p { class: "mcp-hint", "Paste into your MCP client’s settings, then restart the client." }
                 }
             }
         }
