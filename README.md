@@ -85,8 +85,8 @@ Point hitr at your collection root: click `root: /...` in the topbar, paste a pa
 
 ## MCP for agents
 
-1. Open **MCP help** in Hitr and turn on **Enable MCP**. The setting is off by default and is remembered across launches. Previous per-request grant files do not enable this setting.
-2. Copy the client configuration from MCP help and add it to your MCP client. Set the server command to the installed Hitr executable and pass `mcp` as its argument.
+1. Open **MCP** in Hitr and turn on **Enable MCP**. The setting is off by default and is remembered across launches. Previous per-request grant files do not enable this setting.
+2. Select the **Copy configuration** icon and add the copied configuration to your MCP client. Set the server command to the installed Hitr executable and pass `mcp` as its argument.
 3. Keep Hitr open and unlock its vault. Both MCP tools pause when the vault locks or MCP is disabled.
 
 | Tool | What it does |

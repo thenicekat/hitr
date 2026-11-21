@@ -486,7 +486,7 @@ pub fn App() -> Element {
                         aria_expanded: *mcp_help_open.read(),
                         aria_controls: "mcp-help",
                         onclick: move |_| mcp_help_open.toggle(),
-                        "MCP help"
+                        "MCP"
                     }
                     button {
                         class: "btn icon ghost",

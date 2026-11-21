@@ -101,7 +101,9 @@ pub fn McpHelpPanel(on_close: EventHandler<()>, vault_locked: bool) -> Element {
                         h3 { "Connect an MCP client" }
                         p { "Add Hitr to your MCP client’s configuration and restart the client. Keep Hitr open with the vault unlocked, then try searching for a saved request." }
                         button {
-                            class: "btn",
+                            class: "btn mcp-copy",
+                            aria_label: "Copy configuration",
+                            title: "Copy configuration",
                             onclick: {
                                 let config = config.clone();
                                 move |_| {
@@ -120,7 +122,7 @@ pub fn McpHelpPanel(on_close: EventHandler<()>, vault_locked: bool) -> Element {
                                     });
                                 }
                             },
-                            "Copy client configuration"
+                            span { class: "copy-icon", aria_hidden: "true" }
                         }
                         if let Some(message) = *copy_feedback.read() {
                             p { role: "status", "{message}" }

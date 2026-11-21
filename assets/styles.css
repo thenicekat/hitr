@@ -588,6 +588,19 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 }
 .mcp-enable { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
 
+.mcp-copy { display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; }
+.copy-icon { position: relative; width: 15px; height: 15px; }
+.copy-icon::before, .copy-icon::after {
+  content: "";
+  position: absolute;
+  width: 8px;
+  height: 9px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+}
+.copy-icon::before { inset: 1px auto auto 1px; }
+.copy-icon::after { inset: 4px auto auto 4px; background: var(--bg3); }
+
 .update-notice {
   display: flex;
   align-items: center;
