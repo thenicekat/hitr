@@ -580,8 +580,8 @@ pub fn App() -> Element {
                                 "{total_reqs}"
                             }
                         }
-                        button { class: "btn small", title: "import curl", onclick: move |_| modal.set(Modal::ImportCurl), "Import cURL" }
-                        button { class: "btn small", title: "import openapi spec", onclick: move |_| modal.set(Modal::ImportOpenApi), "OpenAPI" }
+                        button { class: "btn small", onclick: move |_| modal.set(Modal::ImportCurl), "Import cURL" }
+                        button { class: "btn small", onclick: move |_| modal.set(Modal::ImportOpenApi), "Import OpenAPI" }
                         button { class: "btn icon", title: "New request", aria_label: "New request", onclick: move |_| modal.set(Modal::NewRequest), "+" }
                     }
                     div { class: "list",
@@ -1190,6 +1190,13 @@ fn NewRequestModal(default_folder: String, on_close: EventHandler<()>) -> Elemen
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum ImportAction {
+    ChooseFile,
+    Preview,
+    Import,
+}
+
 #[component]
 fn ImportCurlModal(default_folder: String, on_close: EventHandler<()>) -> Element {
     let mut input = use_signal(String::new);
@@ -1197,83 +1204,124 @@ fn ImportCurlModal(default_folder: String, on_close: EventHandler<()>) -> Elemen
     let mut folder = use_signal(|| default_folder);
     let mut preview = use_signal(|| None::<Request>);
     let mut err = use_signal(|| None::<String>);
+    let mut action = use_signal(|| None::<ImportAction>);
+    let current_action = *action.read();
+    let busy = current_action.is_some();
+    let has_command = !input.read().trim().is_empty();
+    let has_name = !name.read().trim().is_empty();
 
-    let do_parse = move |_| {
+    let do_preview = move |_| {
         let raw = input.read().clone();
-        if raw.trim().is_empty() {
-            err.set(Some("paste a curl command".into()));
-            return;
-        }
+        action.set(Some(ImportAction::Preview));
+        err.set(None);
         spawn(async move {
             match api::parse_curl(&raw).await {
-                Ok(req) => {
-                    preview.set(Some(req));
-                    err.set(None);
-                }
-                Err(e) => {
+                Ok(req) => preview.set(Some(req)),
+                Err(error) => {
                     preview.set(None);
-                    err.set(Some(e));
+                    err.set(Some(error));
                 }
             }
+            action.set(None);
         });
     };
 
     let do_import = move |_| {
         let raw = input.read().clone();
-        let n = name.read().clone();
-        let f = folder.read().clone();
-        if n.trim().is_empty() {
-            err.set(Some("name required".into()));
-            return;
-        }
-        if f.trim().is_empty() {
-            err.set(Some("folder required".into()));
-            return;
-        }
+        let request_name = name.read().clone();
+        let folder = folder.read().clone();
+        action.set(Some(ImportAction::Import));
+        err.set(None);
         spawn(async move {
-            match api::import_curl(&raw, &f, &n).await {
+            match api::import_curl(&raw, &folder, &request_name).await {
                 Ok(_) => on_close.call(()),
-                Err(e) => err.set(Some(e)),
+                Err(error) => {
+                    err.set(Some(error));
+                    action.set(None);
+                }
             }
         });
     };
 
     rsx! {
         div { class: "modal-bg",
-            div { class: "modal wide",
-                h3 { "import curl" }
-                label { "curl command" }
-                textarea {
-                    class: "body-text",
-                    style: "min-height: 140px",
-                    spellcheck: false,
-                    value: "{input}",
-                    oninput: move |e| input.set(e.value()),
-                    placeholder: "curl 'https://api.example.com/foo' -H 'Authorization: Bearer …' -d '{{\"key\":\"value\"}}'"
+            div {
+                class: "modal import-dialog",
+                role: "dialog",
+                aria_modal: "true",
+                aria_labelledby: "curl-import-title",
+                onkeydown: move |e| {
+                    if e.key() == Key::Escape && action.peek().is_none() {
+                        e.prevent_default();
+                        on_close.call(());
+                    }
+                },
+                header { class: "import-header",
+                    h3 { id: "curl-import-title", "Import cURL" }
                 }
-                div { class: "modal-actions", style: "justify-content: flex-start",
-                    button { class: "btn small", onclick: do_parse, "parse" }
-                }
-                if let Some(r) = preview.read().as_ref() {
-                    div { class: "muted small",
-                        "preview: {r.http.method} {r.http.url}  ·  {r.http.headers.len()} headers"
+                div { class: "import-content",
+                    div { class: "import-field",
+                        label { r#for: "curl-import-command", "cURL command" }
+                        textarea {
+                            id: "curl-import-command",
+                            class: "body-text import-command",
+                            autofocus: true,
+                            disabled: busy,
+                            spellcheck: false,
+                            value: "{input}",
+                            oninput: move |e| {
+                                input.set(e.value());
+                                preview.set(None);
+                                err.set(None);
+                            },
+                            placeholder: "curl https://api.example.com/items"
+                        }
+                        div { class: "import-preview-row",
+                            button { class: "btn ghost", disabled: busy || !has_command, onclick: do_preview,
+                                if current_action == Some(ImportAction::Preview) { "Checking…" } else { "Preview request" }
+                            }
+                            if let Some(req) = preview.read().as_ref() {
+                                div { class: "import-preview-request", role: "status",
+                                    span { class: "method method-{req.http.method.to_lowercase()}", "{req.http.method}" }
+                                    code { "{req.http.url}" }
+                                }
+                            }
+                        }
+                    }
+                    div { class: "import-fields",
+                        div { class: "import-field",
+                            label { r#for: "curl-import-name", "Request name" }
+                            input {
+                                id: "curl-import-name",
+                                disabled: busy,
+                                aria_required: "true",
+                                value: "{name}",
+                                oninput: move |e| { name.set(e.value()); err.set(None); },
+                                placeholder: "List items"
+                            }
+                        }
+                        div { class: "import-field",
+                            label { r#for: "curl-import-folder", "Save to folder" }
+                            input {
+                                id: "curl-import-folder",
+                                disabled: busy,
+                                value: "{folder}",
+                                oninput: move |e| { folder.set(e.value()); err.set(None); },
+                                placeholder: "Collection root",
+                                aria_describedby: "curl-import-folder-hint",
+                            }
+                            p { id: "curl-import-folder-hint", class: "import-hint", "Leave blank to save at the collection root." }
+                        }
+                    }
+                    if let Some(error) = err.read().as_ref() {
+                        p { class: "import-error", role: "alert", "{error}" }
                     }
                 }
-                label { "name" }
-                input {
-                    value: "{name}",
-                    oninput: move |e| name.set(e.value()),
-                    placeholder: "my request"
-                }
-                label { "folder (relative to collection root)" }
-                input {
-                    value: "{folder}",
-                    oninput: move |e| folder.set(e.value()),
-                }
-                if let Some(e) = err.read().as_ref() { div { class: "error", "{e}" } }
-                div { class: "modal-actions",
-                    button { class: "btn", onclick: move |_| on_close.call(()), "cancel" }
-                    button { class: "btn primary", onclick: do_import, "import" }
+                footer { class: "import-footer",
+                    button { class: "btn ghost", disabled: busy, onclick: move |_| on_close.call(()), "Cancel" }
+                    button { class: "btn primary", disabled: busy || !has_command || !has_name, onclick: do_import,
+                        if current_action == Some(ImportAction::Import) { "Importing…" } else { "Import request" }
+                    }
                 }
             }
         }
@@ -1284,146 +1332,219 @@ fn ImportCurlModal(default_folder: String, on_close: EventHandler<()>) -> Elemen
 fn ImportOpenApiModal(on_close: EventHandler<()>, on_toast: EventHandler<String>) -> Element {
     let mut spec_path = use_signal(String::new);
     let mut folder_prefix = use_signal(|| "openapi".to_string());
-    let mut env_name = use_signal(String::new);
+    let mut env_name_override = use_signal(|| None::<String>);
     let mut create_env = use_signal(|| true);
     let mut fill_empty_bodies = use_signal(|| false);
     let mut preview = use_signal(|| None::<ImportPreview>);
     let mut err = use_signal(|| None::<String>);
-    let mut busy = use_signal(|| false);
+    let mut action = use_signal(|| None::<ImportAction>);
+    let current_action = *action.read();
+    let busy = current_action.is_some();
+    let has_spec = !spec_path.read().trim().is_empty();
+    let has_preview = preview.read().is_some();
+    let env_name = use_memo(move || {
+        env_name_override
+            .read()
+            .clone()
+            .or_else(|| preview.read().as_ref().map(|spec| slug_env(&spec.title)))
+            .unwrap_or_default()
+    });
 
-    let do_preview = move |_| {
-        let p = spec_path.read().clone();
-        if p.trim().is_empty() {
-            err.set(Some("spec path required".into()));
-            return;
-        }
-        busy.set(true);
+    let choose_file = move |_| {
+        action.set(Some(ImportAction::ChooseFile));
         spawn(async move {
-            match api::preview_openapi(&p).await {
-                Ok(pv) => {
-                    if env_name.peek().is_empty() {
-                        env_name.set(slug_env(&pv.title));
-                    }
-                    preview.set(Some(pv));
+            match api::pick_openapi_file().await {
+                Ok(Some(path)) => {
+                    spec_path.set(path);
+                    preview.set(None);
                     err.set(None);
                 }
-                Err(e) => {
+                Ok(None) => {}
+                Err(error) => err.set(Some(error)),
+            }
+            action.set(None);
+        });
+    };
+
+    let do_preview = move |_| {
+        let path = spec_path.read().clone();
+        action.set(Some(ImportAction::Preview));
+        err.set(None);
+        spawn(async move {
+            match api::preview_openapi(&path).await {
+                Ok(pv) => preview.set(Some(pv)),
+                Err(error) => {
                     preview.set(None);
-                    err.set(Some(e));
+                    err.set(Some(error));
                 }
             }
-            busy.set(false);
+            action.set(None);
         });
     };
 
     let do_import = move |_| {
-        let p = spec_path.read().clone();
-        let fp = folder_prefix.read().clone();
-        let ce = *create_env.read();
-        let en = env_name.read().clone();
+        let path = spec_path.read().clone();
+        let folder = folder_prefix.read().clone();
+        let create = *create_env.read();
+        let environment = env_name.read().clone();
         let fill = *fill_empty_bodies.read();
-        if preview.peek().is_none() {
-            err.set(Some("preview first".into()));
+        if create && environment.trim().is_empty() {
+            err.set(Some(
+                "Enter an environment name or turn off environment creation.".into(),
+            ));
             return;
         }
-        busy.set(true);
+        action.set(Some(ImportAction::Import));
+        err.set(None);
         spawn(async move {
-            let result = api::import_openapi(&p, &fp, ce, &en, fill).await;
-            busy.set(false);
-            match result {
+            match api::import_openapi(&path, &folder, create, &environment, fill).await {
                 Ok(stats) => {
                     on_toast.call(format!(
-                        "Imported {} requests; filled {} empty bodies; skipped {} existing",
+                        "Imported {} requests, filled {} empty bodies, and skipped {} existing requests",
                         stats.written, stats.filled_empty_bodies, stats.skipped_existing
                     ));
                     on_close.call(());
                 }
-                Err(e) => err.set(Some(e)),
+                Err(error) => {
+                    err.set(Some(error));
+                    action.set(None);
+                }
             }
         });
     };
 
     rsx! {
         div { class: "modal-bg",
-            div { class: "modal wide",
-                h3 { "import openapi spec" }
-                label { "spec path (yaml or json, absolute)" }
-                input {
-                    autofocus: true,
-                    value: "{spec_path}",
-                    oninput: move |e| { spec_path.set(e.value()); preview.set(None); },
-                    placeholder: "/path/to/openapi.yaml"
-                }
-                div { class: "modal-actions", style: "justify-content: flex-start; margin-top: 8px;",
-                    button {
-                        class: if *busy.read() { "btn small disabled" } else { "btn small" },
-                        disabled: *busy.read(),
-                        onclick: do_preview,
-                        "preview"
+            div {
+                class: "modal import-dialog",
+                role: "dialog",
+                aria_modal: "true",
+                aria_labelledby: "openapi-import-title",
+                onkeydown: move |e| {
+                    if e.key() == Key::Escape && action.peek().is_none() {
+                        e.prevent_default();
+                        on_close.call(());
                     }
+                },
+                header { class: "import-header",
+                    h3 { id: "openapi-import-title", "Import OpenAPI" }
                 }
-                if let Some(pv) = preview.read().as_ref() {
-                    div { class: "muted small",
-                        "{pv.title} v{pv.version}  ·  {pv.op_count} ops across {pv.folder_count} folders"
-                    }
-                    if !pv.suggested_vars.is_empty() {
-                        div { class: "muted small",
-                            "vars: "
-                            for (i, v) in pv.suggested_vars.iter().enumerate() {
-                                if i > 0 { ", " }
-                                span { "{v.name}" }
-                                if v.secret { " (secret)" }
+                div { class: "import-content",
+                    div { class: "import-field",
+                        label { r#for: "openapi-import-file", "YAML or JSON file" }
+                        div { class: "import-file-row",
+                            input {
+                                id: "openapi-import-file",
+                                class: "import-file-path",
+                                autofocus: true,
+                                disabled: busy,
+                                value: "{spec_path}",
+                                oninput: move |e| {
+                                    spec_path.set(e.value());
+                                    preview.set(None);
+                                    err.set(None);
+                                },
+                                placeholder: "/path/to/openapi.yaml"
+                            }
+                            button { class: "btn", disabled: busy, onclick: choose_file, "Choose file…" }
+                            button { class: "btn ghost", disabled: busy || !has_spec, onclick: do_preview,
+                                if current_action == Some(ImportAction::Preview) { "Checking…" } else { "Preview" }
                             }
                         }
                     }
-                    if !pv.sample_ops.is_empty() {
-                        details { class: "headers",
-                            summary { "sample operations ({pv.sample_ops.len()})" }
-                            for op in pv.sample_ops.iter() {
-                                div { class: "hdr",
-                                    span { class: "hdr-k", "{op.method} {op.folder}" }
-                                    span { class: "hdr-v", "{op.path}" }
+                    if let Some(pv) = preview.read().as_ref() {
+                        div { class: "import-summary",
+                            div { role: "status",
+                                strong { "{pv.title}" }
+                                if !pv.version.is_empty() {
+                                    span { class: "import-version", "{pv.version}" }
+                                }
+                                p { class: "import-hint", "{pv.op_count} requests in {pv.folder_count} folders" }
+                            }
+                            if !pv.sample_ops.is_empty() {
+                                details {
+                                    summary { "Sample requests ({pv.sample_ops.len()})" }
+                                    ul { class: "import-samples",
+                                        for op in pv.sample_ops.iter() {
+                                            li {
+                                                span { class: "method method-{op.method.to_lowercase()}", "{op.method}" }
+                                                code { "{op.path}" }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
-                }
-
-                label { "folder prefix (relative to collection root)" }
-                input {
-                    value: "{folder_prefix}",
-                    oninput: move |e| folder_prefix.set(e.value()),
-                    placeholder: "openapi"
-                }
-
-                div { style: "display: flex; align-items: center; gap: 8px; margin-top: 12px; min-width: 0; flex-wrap: wrap;",
-                    input {
-                        r#type: "checkbox",
-                        checked: *create_env.read(),
-                        onchange: move |e| create_env.set(e.checked()),
+                    div { class: "import-options",
+                        div { class: "import-fields",
+                            div { class: "import-field",
+                                label { r#for: "openapi-import-folder", "Save to folder" }
+                                input {
+                                    id: "openapi-import-folder",
+                                    disabled: busy,
+                                    value: "{folder_prefix}",
+                                    oninput: move |e| folder_prefix.set(e.value()),
+                                    placeholder: "Collection root"
+                                }
+                            }
+                            div { class: "import-field",
+                                label { class: "import-option",
+                                    input { r#type: "checkbox", disabled: busy, checked: *create_env.read(), onchange: move |e| {
+                                        create_env.set(e.checked());
+                                        err.set(None);
+                                    } }
+                                    "Create an environment"
+                                }
+                                if *create_env.read() {
+                                    input {
+                                        aria_label: "Environment name",
+                                        disabled: busy,
+                                        value: "{env_name}",
+                                        oninput: move |e| { env_name_override.set(Some(e.value())); err.set(None); },
+                                        placeholder: "Environment name"
+                                    }
+                                    if let Some(pv) = preview.read().as_ref() {
+                                        if !pv.suggested_vars.is_empty() {
+                                            ul { class: "import-variables", aria_label: "Suggested environment variables",
+                                                for var in pv.suggested_vars.iter() {
+                                                    li {
+                                                        code { "{var.name}" }
+                                                        if var.secret { " (secret)" }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        label { class: "import-option",
+                            input {
+                                r#type: "checkbox",
+                                disabled: busy,
+                                checked: *fill_empty_bodies.read(),
+                                aria_describedby: "openapi-import-fill-hint",
+                                onchange: move |e| fill_empty_bodies.set(e.checked())
+                            }
+                            "Fill empty JSON bodies in existing requests"
+                        }
+                        p { id: "openapi-import-fill-hint", class: "import-hint import-option-detail",
+                            "Matching files are rewritten, including their YAML formatting and comments."
+                        }
                     }
-                    span { class: "small", "create env with suggested vars" }
-                }
-                div { style: "display: flex; align-items: center; gap: 8px; margin-top: 12px;",
-                    input { r#type: "checkbox", checked: *fill_empty_bodies.read(), onchange: move |e| fill_empty_bodies.set(e.checked()) }
-                    span { class: "small", "Fill empty JSON bodies in matching existing requests (rewrites YAML formatting and comments)" }
-                }
-                if *create_env.read() {
-                    label { "env name" }
-                    input {
-                        value: "{env_name}",
-                        oninput: move |e| env_name.set(e.value()),
+                    if let Some(error) = err.read().as_ref() {
+                        p { class: "import-error", role: "alert", "{error}" }
                     }
                 }
-
-                if let Some(e) = err.read().as_ref() { div { class: "error", "{e}" } }
-                div { class: "modal-actions",
-                    button { class: "btn", onclick: move |_| on_close.call(()), "cancel" }
+                footer { class: "import-footer",
+                    button { class: "btn ghost", disabled: busy, onclick: move |_| on_close.call(()), "Cancel" }
                     button {
-                        class: if *busy.read() { "btn primary disabled" } else { "btn primary" },
-                        disabled: *busy.read(),
+                        class: "btn primary",
+                        disabled: busy || !has_preview,
                         onclick: do_import,
-                        if *busy.read() { "importing…" } else { "import" }
+                        if current_action == Some(ImportAction::Import) { "Importing…" }
+                        else { "Import requests" }
                     }
                 }
             }

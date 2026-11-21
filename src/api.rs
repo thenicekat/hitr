@@ -333,3 +333,7 @@ pub async fn clear_history(request_id: &str) -> Result<(), String> {
 pub async fn pick_folder() -> Result<Option<String>, String> {
     call("pick_folder", Empty {}).await
 }
+
+pub async fn pick_openapi_file() -> Result<Option<String>, String> {
+    call("pick_openapi_file", Empty {}).await
+}

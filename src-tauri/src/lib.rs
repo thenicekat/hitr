@@ -658,6 +658,21 @@ async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
     }
 }
 
+#[tauri::command]
+async fn pick_openapi_file(app: AppHandle) -> Result<Option<String>, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title("Choose an OpenAPI file")
+        .add_filter("OpenAPI files", &["yaml", "yml", "json"])
+        .pick_file(move |path| {
+            let _ = tx.send(path);
+        });
+    rx.await
+        .map(|path| path.map(|file| file.to_string()))
+        .map_err(|error| error.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let root = read_root_from_config().unwrap_or_else(default_root);
@@ -717,6 +732,7 @@ pub fn run() {
             load_history,
             clear_history,
             pick_folder,
+            pick_openapi_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
