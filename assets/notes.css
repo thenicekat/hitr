@@ -51,3 +51,6 @@ footer { display: flex; align-items: center; justify-content: space-between; fle
 .new-note { display: grid; place-items: center; width: 27px; height: 26px; flex: none; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--fg-dim); font-size: 21px; font-weight: 300; }
 .new-note:hover { background: var(--bg3); }
 .new-note:disabled, .note-switcher select:disabled { opacity: .5; }
+
+.open-apis { display: grid; place-items: center; flex: none; width: 27px; height: 26px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--fg-mute); }
+.open-apis:hover { background: var(--bg3); color: var(--fg); }

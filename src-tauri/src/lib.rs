@@ -792,6 +792,29 @@ fn move_notes(window: tauri::WebviewWindow, x: i32, y: i32) -> Result<(), String
 }
 
 #[tauri::command]
+async fn open_api_workspace(app: AppHandle) -> Result<(), String> {
+    let window = match app.get_webview_window("main") {
+        Some(window) => window,
+        None => {
+            let config = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|window| window.label == "main")
+                .ok_or("API window configuration not found")?;
+            tauri::WebviewWindowBuilder::from_config(&app, config)
+                .map_err(|e| e.to_string())?
+                .build()
+                .map_err(|e| e.to_string())?
+        }
+    };
+    window.show().map_err(|e| e.to_string())?;
+    window.unminimize().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn resize_notes(window: tauri::WebviewWindow, expanded: bool) -> Result<(), String> {
     if window.label() != "notes" {
         return Err("Only the notes window can be resized".into());
@@ -872,6 +895,7 @@ pub fn run() {
             notes_store::create_note,
             notes_store::select_note,
             resize_notes,
+            open_api_workspace,
             notes_drag_origin,
             move_notes,
             get_root,

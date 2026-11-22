@@ -155,6 +155,14 @@ pub fn Notes() -> Element {
                         }
                     }
                     button { class: "new-note", title: "New note", aria_label: "New note", disabled: !ready() || busy(), onclick: move |_| change_note.call(None), "+" }
+                    button { class: "open-apis", title: "Open APIs", aria_label: "Open APIs",
+                        onclick: move |_| { spawn(async move {
+                            if let Err(e) = api::open_api_workspace().await { status.set(format!("Couldn't open APIs: {e}")); }
+                        }); },
+                        svg { width: "15", height: "15", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "1.6", stroke_linecap: "round", stroke_linejoin: "round", "aria-hidden": "true",
+                            path { d: "m8 7-5 5 5 5m8-10 5 5-5 5m-3-14-2 18" }
+                        }
+                    }
                     button { class: "settings-button", title: "Preferences", aria_label: "Preferences", aria_expanded: "{settings}", onclick: move |_| settings.set(!settings()), "···" }
                     button { class: "close", title: "Save and collapse", aria_label: "Save and collapse", disabled: !ready() || busy(),
                         onclick: move |_| { spawn(async move {
