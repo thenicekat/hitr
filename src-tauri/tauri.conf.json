@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "dx serve --port 1420 --interactive false",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "dx bundle --release",
+    "beforeBuildCommand": "dx bundle --release --debug-symbols false",
     "frontendDist": "../dist/public"
   },
   "app": {
