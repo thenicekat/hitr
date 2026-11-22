@@ -239,6 +239,7 @@ fn install_input_attrs() {
     cb.forget();
 }
 
+static THEME: Asset = asset!("/assets/theme.css");
 static CSS: Asset = asset!("/assets/styles.css");
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -261,6 +262,7 @@ pub fn App() -> Element {
     let mut error = use_signal(|| None::<String>);
     let mut modal = use_signal(|| Modal::None);
     let mut vault_locked = use_signal(|| true);
+    let mut changing_theme = use_signal(|| false);
     let mut mcp_help_open = use_signal(|| false);
     let close_mcp_help = move |_| {
         mcp_help_open.set(false);
@@ -377,6 +379,7 @@ pub fn App() -> Element {
     });
 
     use_hook(|| {
+        document::eval(include_str!("../assets/theme.js"));
         load_all.call(());
         install_input_attrs();
         install_shortcuts(fire);
@@ -414,6 +417,7 @@ pub fn App() -> Element {
     });
 
     rsx! {
+        link { rel: "stylesheet", href: THEME }
         link { rel: "stylesheet", href: CSS }
         div { class: "app",
             // header
@@ -474,6 +478,22 @@ pub fn App() -> Element {
                 span { class: "sep" }
                 if let Some(e) = error.read().as_ref() {
                     span { class: "error", "{e}" }
+                }
+                button {
+                    class: "btn ghost theme-toggle", title: "Switch between light and dark appearance", aria_label: "Toggle dark mode", disabled: changing_theme(),
+                    onclick: move |_| { spawn(async move {
+                        changing_theme.set(true);
+                        match api::load_notes_preferences().await {
+                            Ok(mut preferences) => {
+                                preferences.dark = !preferences.dark;
+                                if let Err(e) = api::save_notes_preferences(&preferences).await { error.set(Some(e)); }
+                            }
+                            Err(e) => error.set(Some(e)),
+                        }
+                        changing_theme.set(false);
+                    }); },
+                    span { class: "theme-to-dark", "Dark" }
+                    span { class: "theme-to-light", "Light" }
                 }
                 if !*vault_locked.read() {
                     button {

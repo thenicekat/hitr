@@ -337,3 +337,45 @@ pub async fn pick_folder() -> Result<Option<String>, String> {
 pub async fn pick_openapi_file() -> Result<Option<String>, String> {
     call("pick_openapi_file", Empty {}).await
 }
+
+#[derive(Serialize)]
+struct NoteArgs<'a> {
+    id: &'a str,
+    text: &'a str,
+    title: &'a str,
+}
+
+pub async fn load_notes() -> Result<NotesBook, String> {
+    call("load_notes", Empty {}).await
+}
+pub async fn create_note() -> Result<NotesBook, String> {
+    call("create_note", Empty {}).await
+}
+pub async fn select_note(id: &str) -> Result<NotesBook, String> {
+    #[derive(Serialize)]
+    struct Args<'a> {
+        id: &'a str,
+    }
+    call("select_note", Args { id }).await
+}
+pub async fn save_note(id: &str, text: &str, title: &str) -> Result<(), String> {
+    call_unit("save_note", NoteArgs { id, text, title }).await
+}
+pub async fn resize_notes(expanded: bool) -> Result<(), String> {
+    #[derive(Serialize)]
+    struct Args {
+        expanded: bool,
+    }
+    call_unit("resize_notes", Args { expanded }).await
+}
+
+pub async fn load_notes_preferences() -> Result<NotesPreferences, String> {
+    call("load_notes_preferences", Empty {}).await
+}
+pub async fn save_notes_preferences(preferences: &NotesPreferences) -> Result<(), String> {
+    #[derive(Serialize)]
+    struct Args<'a> {
+        preferences: &'a NotesPreferences,
+    }
+    call_unit("save_notes_preferences", Args { preferences }).await
+}

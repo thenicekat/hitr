@@ -163,3 +163,31 @@ pub enum McpStatus {
     Error { message: String },
     Unsupported,
 }
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct NotesPreferences {
+    pub dark: bool,
+    pub text_size: u8,
+    pub always_on_top: bool,
+}
+impl Default for NotesPreferences {
+    fn default() -> Self {
+        Self {
+            dark: false,
+            text_size: 15,
+            always_on_top: true,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, serde::Deserialize)]
+pub struct SavedNote {
+    pub id: String,
+    pub title: String,
+    pub html: String,
+}
+#[derive(serde::Deserialize)]
+pub struct NotesBook {
+    pub active_id: String,
+    pub notes: Vec<SavedNote>,
+}

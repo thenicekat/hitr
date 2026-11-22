@@ -22,6 +22,7 @@ mod loader;
 pub mod mcp;
 mod mcp_inputs;
 mod model;
+mod notes_store;
 mod openapi;
 mod updates;
 mod vault;
@@ -33,7 +34,7 @@ use directories::BaseDirs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::AppHandle;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 struct AppState {
@@ -673,6 +674,156 @@ async fn pick_openapi_file(app: AppHandle) -> Result<Option<String>, String> {
         .map_err(|error| error.to_string())
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct NotesPreferences {
+    dark: bool,
+    text_size: u8,
+    always_on_top: bool,
+}
+impl Default for NotesPreferences {
+    fn default() -> Self {
+        Self {
+            dark: false,
+            text_size: 15,
+            always_on_top: true,
+        }
+    }
+}
+
+#[tauri::command]
+fn load_notes_preferences() -> Result<NotesPreferences, String> {
+    let path = note_path()?.with_file_name("notes-preferences.json");
+    match std::fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(NotesPreferences::default()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+fn save_notes_preferences(
+    window: tauri::WebviewWindow,
+    preferences: NotesPreferences,
+) -> Result<(), String> {
+    use std::io::Write;
+    if !matches!(window.label(), "notes" | "main") {
+        return Err("Invalid window".into());
+    }
+    if !(13..=19).contains(&preferences.text_size) {
+        return Err("Text size must be between 13 and 19".into());
+    }
+    let path = note_path()?.with_file_name("notes-preferences.json");
+    let dir = path.parent().ok_or("Invalid preferences path")?;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let mut file = tempfile::NamedTempFile::new_in(dir).map_err(|e| e.to_string())?;
+    file.write_all(&serde_json::to_vec(&preferences).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    if let Some(notes) = window.app_handle().get_webview_window("notes") {
+        notes
+            .set_always_on_top(preferences.always_on_top)
+            .map_err(|e| e.to_string())?;
+    }
+    file.persist(path).map_err(|e| e.to_string())?;
+    window
+        .app_handle()
+        .emit("notes-preferences-changed", &preferences)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn note_path() -> Result<PathBuf, String> {
+    let dirs = BaseDirs::new().ok_or("Cannot find the application data directory")?;
+    Ok(dirs.data_local_dir().join("hitr").join("quick-note.txt"))
+}
+
+fn read_note(path: &std::path::Path) -> Result<String, String> {
+    match std::fs::read_to_string(path.with_extension("html")) {
+        Ok(html) => return Ok(html),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("Could not load note: {e}")),
+    }
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(text
+            .lines()
+            .map(|line| {
+                format!(
+                    "<div>{}</div>",
+                    line.replace('&', "&amp;")
+                        .replace('<', "&lt;")
+                        .replace('>', "&gt;")
+                )
+            })
+            .collect()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(format!("Could not load note: {e}")),
+    }
+}
+
+#[cfg(test)]
+fn write_note(path: &std::path::Path, text: &str) -> Result<(), String> {
+    use std::io::Write;
+    let path = path.with_extension("html");
+    let dir = path.parent().ok_or("Invalid note path")?;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let mut file = tempfile::NamedTempFile::new_in(dir).map_err(|e| e.to_string())?;
+    file.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+    file.persist(path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn notes_drag_origin(window: tauri::WebviewWindow) -> Result<(i32, i32, f64), String> {
+    if window.label() != "notes" {
+        return Err("Invalid window".into());
+    }
+    let position = window.outer_position().map_err(|e| e.to_string())?;
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    Ok((position.x, position.y, scale))
+}
+
+#[tauri::command]
+fn move_notes(window: tauri::WebviewWindow, x: i32, y: i32) -> Result<(), String> {
+    if window.label() != "notes" {
+        return Err("Invalid window".into());
+    }
+    window
+        .set_position(tauri::PhysicalPosition::new(x, y))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn resize_notes(window: tauri::WebviewWindow, expanded: bool) -> Result<(), String> {
+    if window.label() != "notes" {
+        return Err("Only the notes window can be resized".into());
+    }
+    let (width, height) = if expanded {
+        (360.0, 400.0)
+    } else {
+        (76.0, 76.0)
+    };
+    // Keep the expanded panel inside the current display's usable area.
+    if expanded {
+        if let Some(monitor) = window.current_monitor().map_err(|e| e.to_string())? {
+            let area = monitor.work_area();
+            let pos = window.outer_position().map_err(|e| e.to_string())?;
+            let scale = monitor.scale_factor();
+            let max_x = (area.position.x as i64 + area.size.width as i64 - (width * scale) as i64)
+                .max(area.position.x as i64);
+            let max_y = (area.position.y as i64 + area.size.height as i64
+                - (height * scale) as i64)
+                .max(area.position.y as i64);
+            let x = (pos.x as i64).clamp(area.position.x as i64, max_x) as i32;
+            let y = (pos.y as i64).clamp(area.position.y as i64, max_y) as i32;
+            window
+                .set_position(tauri::PhysicalPosition::new(x, y))
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    window
+        .set_size(tauri::LogicalSize::new(width, height))
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let root = read_root_from_config().unwrap_or_else(default_root);
@@ -681,6 +832,19 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
+            if let Some(notes) = app.get_webview_window("notes") {
+                let preferences = load_notes_preferences().unwrap_or_default();
+                notes.set_always_on_top(preferences.always_on_top)?;
+            }
+            #[cfg(target_os = "macos")]
+            if let Some(notes) = app.get_webview_window("notes") {
+                use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
+                // Setup runs on the main thread and Tauri owns this NSWindow.
+                let native = unsafe { &*(notes.ns_window()? as *const NSWindow) };
+                native.setCollectionBehavior(
+                    native.collectionBehavior() | NSWindowCollectionBehavior::FullScreenAuxiliary,
+                );
+            }
             #[cfg(target_os = "macos")]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
@@ -701,6 +865,15 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            load_notes_preferences,
+            save_notes_preferences,
+            notes_store::load_notes,
+            notes_store::save_note,
+            notes_store::create_note,
+            notes_store::select_note,
+            resize_notes,
+            notes_drag_origin,
+            move_notes,
             get_root,
             set_root,
             load,
@@ -736,4 +909,27 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod notes_tests {
+    use super::{read_note, write_note};
+
+    #[test]
+    fn migrates_plain_text_without_interpreting_markup() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("quick-note.txt");
+        std::fs::write(&path, "<example> & café\nNext line").unwrap();
+        assert_eq!(
+            read_note(&path).unwrap(),
+            "<div>&lt;example&gt; &amp; café</div><div>Next line</div>"
+        );
+        let html = "<h2>Plan</h2><ul><li><b>Write</b> this</li></ul>";
+        write_note(&path, html).unwrap();
+        assert_eq!(read_note(&path).unwrap(), html);
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            "<example> & café\nNext line"
+        );
+    }
 }

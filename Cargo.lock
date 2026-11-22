@@ -2710,6 +2710,7 @@ dependencies = [
  "age",
  "directories",
  "hex",
+ "objc2-app-kit",
  "openapiv3",
  "reqwest 0.12.28",
  "rmcp",

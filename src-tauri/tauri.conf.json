@@ -18,11 +18,27 @@
         "height": 900,
         "minWidth": 900,
         "minHeight": 500
+      },
+      {
+        "label": "notes",
+        "title": "Hitr notes",
+        "url": "index.html?notes=1",
+        "width": 76,
+        "height": 76,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": false,
+        "visibleOnAllWorkspaces": true,
+        "acceptFirstMouse": true
       }
     ],
     "security": {
       "csp": null
-    }
+    },
+    "macOSPrivateApi": true
   },
   "bundle": {
     "active": true,

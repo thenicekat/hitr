@@ -8,6 +8,12 @@ Built because heavyweight Electron clients are slow and cloud-first tools want y
 
 **MVP.** macOS-tested. Cross-platform in principle (age-encrypted vault, no OS-specific deps) but only tested on macOS.
 
+## Floating notes experiment
+
+Hitr also opens a small floating notes button. Click to open it or drag the whole button to move it. The note switcher selects a saved note; **+** saves the current note and creates a new one. Notes autosave and support bold, italic, underline, headings, and lists. Titles come from the first non-empty line.
+
+Use **···** for appearance, text size, and stay-on-top preferences. Appearance is shared with the API workspace, which also has a light/dark switch in its toolbar. Notes and their last selected ID are stored in `notes.json` under the local Hitr application data directory. Existing quick-note files are imported on first use and retained. Notes are plain HTML within the JSON file, separate from the encrypted secrets vault.
+
 ## Features
 
 **Collections**
