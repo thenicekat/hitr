@@ -13,8 +13,35 @@ pub struct SavedNote {
 pub struct NotesBook {
     pub active_id: String,
     pub notes: Vec<SavedNote>,
+    #[serde(default = "already_onboarded")]
+    pub onboarding_complete: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
+}
+
+// Books saved before onboarding belong to returning users.
+fn already_onboarded() -> bool {
+    true
+}
+
+fn has_existing_data(path: &Path) -> Result<bool, String> {
+    for name in [
+        "quick-note.html",
+        "quick-note.txt",
+        "focus.json",
+        "notes-preferences.json",
+        "vault.age",
+        "config.json",
+    ] {
+        if path
+            .with_file_name(name)
+            .try_exists()
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn read(path: &Path) -> Result<NotesBook, String> {
@@ -24,6 +51,7 @@ fn read(path: &Path) -> Result<NotesBook, String> {
             let html = super::read_note(&path.with_file_name("quick-note.txt"))?;
             Ok(NotesBook {
                 active_id: "1".into(),
+                onboarding_complete: has_existing_data(path)?,
                 warning: None,
                 notes: vec![SavedNote {
                     id: "1".into(),
@@ -58,6 +86,18 @@ pub fn load_notes() -> Result<NotesBook, String> {
     write(&path, &book)?;
     book.warning = warning;
     Ok(book)
+}
+
+#[tauri::command]
+pub fn finish_onboarding() -> Result<(), String> {
+    let _lock = LOCK.lock().map_err(|e| e.to_string())?;
+    finish_onboarding_at(&path()?)
+}
+
+fn finish_onboarding_at(path: &Path) -> Result<(), String> {
+    let mut book = read(path)?;
+    book.onboarding_complete = true;
+    write(path, &book)
 }
 
 // Keep tasks created in the earlier Focus experiment as ordinary actionable
@@ -171,6 +211,73 @@ pub fn create_note() -> Result<NotesBook, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_install_resumes_onboarding_until_finished_without_changing_notes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.json");
+        let mut book = read(&path).unwrap();
+        assert!(!book.onboarding_complete);
+        assert!(book.notes[0].html.is_empty());
+        update(
+            &mut book,
+            "1",
+            "<p>Keep my draft</p>".into(),
+            "Draft".into(),
+        )
+        .unwrap();
+        write(&path, &book).unwrap();
+        assert!(!read(&path).unwrap().onboarding_complete);
+        finish_onboarding_at(&path).unwrap();
+        finish_onboarding_at(&path).unwrap();
+        let loaded = read(&path).unwrap();
+        assert!(loaded.onboarding_complete);
+        assert_eq!(loaded.active_id, "1");
+        assert_eq!(loaded.notes.len(), 1);
+        assert_eq!(loaded.notes[0].html, "<p>Keep my draft</p>");
+        assert_eq!(loaded.notes[0].title, "Draft");
+    }
+
+    #[test]
+    fn existing_books_and_legacy_installs_skip_automatic_onboarding() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.json");
+        let original = r#"{"active_id":"old","notes":[{"id":"old","title":"Existing","html":"<p>Keep this</p>"}]}"#;
+        std::fs::write(&path, original).unwrap();
+        let book = read(&path).unwrap();
+        assert!(book.onboarding_complete);
+        assert_eq!(book.active_id, "old");
+        assert_eq!(book.notes[0].html, "<p>Keep this</p>");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+
+        for name in [
+            "quick-note.html",
+            "quick-note.txt",
+            "focus.json",
+            "notes-preferences.json",
+            "vault.age",
+            "config.json",
+        ] {
+            let legacy = tempfile::tempdir().unwrap();
+            std::fs::write(legacy.path().join(name), "").unwrap();
+            assert!(
+                read(&legacy.path().join("notes.json"))
+                    .unwrap()
+                    .onboarding_complete,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn onboarding_does_not_replace_an_unreadable_book() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.json");
+        std::fs::write(&path, "broken json").unwrap();
+        assert!(finish_onboarding_at(&path).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "broken json");
+    }
+
     #[test]
     fn preserves_legacy_note_and_isolates_edits() {
         let dir = tempfile::tempdir().unwrap();

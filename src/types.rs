@@ -190,6 +190,12 @@ pub struct SavedNote {
 pub struct NotesBook {
     pub active_id: String,
     pub notes: Vec<SavedNote>,
+    #[serde(default = "already_onboarded")]
+    pub onboarding_complete: bool,
     #[serde(default)]
     pub warning: Option<String>,
+}
+
+fn already_onboarded() -> bool {
+    true
 }

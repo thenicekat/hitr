@@ -30,6 +30,15 @@ registered, and no per-second disk writes are needed.
 Focus queue into a note once, leaving the source file intact. A failed optional
 import returns a visible warning without preventing access to existing notes.
 
+`src/onboarding.rs` renders the three-step walkthrough inside the expanded
+notes window, before the first editor mounts. Its checkbox, glow, and API
+previews use component state only. `notes.json` records `onboarding_complete`;
+fresh installs start with `false`, while older books missing the field and
+installs with legacy data count as returning users. Finishing or skipping
+persists completion atomically. Preferences can replay the walkthrough after
+saving the current draft; replay leaves persisted completion and note content
+alone. Closing the panel keeps an unfinished walkthrough pending.
+
 ```
 ┌────────────────── window (WKWebView on macOS) ─────────────────┐
 │  ┌──── Dioxus WASM ────────────────────────────────────┐       │

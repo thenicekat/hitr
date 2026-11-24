@@ -927,6 +927,7 @@ pub fn run() {
             load_notes_preferences,
             save_notes_preferences,
             notes_store::load_notes,
+            notes_store::finish_onboarding,
             notes_store::save_note,
             notes_store::create_note,
             notes_store::select_note,

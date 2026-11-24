@@ -348,6 +348,9 @@ struct NoteArgs<'a> {
 pub async fn load_notes() -> Result<NotesBook, String> {
     call("load_notes", Empty {}).await
 }
+pub async fn finish_onboarding() -> Result<(), String> {
+    call_unit("finish_onboarding", Empty {}).await
+}
 pub async fn create_note() -> Result<NotesBook, String> {
     call("create_note", Empty {}).await
 }

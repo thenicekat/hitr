@@ -14,6 +14,12 @@ Hitr opens a small floating notes button. Click to open it or drag the whole
 button to move it. Write freely, then turn any actionable line into a checkbox
 using the toolbar or **⌘⇧L**. Notes, context, and things to do share the same page.
 
+On a new installation, opening the icon first shows a short, three-step
+walkthrough: try a checkbox, preview the reminder glow, and explore how notes
+and APIs connect. Choose **Start writing** or **Skip intro** to open your first
+note. Completion is remembered. Existing users go straight to their notes;
+anyone can replay the walkthrough from **··· → Quick tour**.
+
 Use the bell in the toolbar, or **Remind** beside a checkbox, to set a reminder
 for that line. Choose 5, 15, 30, or 60 minutes, or a specific local date and time.
 When a reminder is due, the **whole floating icon glows softly**. There is no
