@@ -37,6 +37,12 @@ lists. Titles come from the first non-empty line. Use **···** for appearance,
 text size, and stay-on-top preferences. Appearance is shared with the API
 workspace.
 
+Choose **··· → Delete note** to remove the current note and open the next one
+(or the previous one at the end of the list). Deleting your only note opens a
+fresh blank. **Undo** restores the most recently deleted note, including its
+latest edits and reminders, without losing work in other notes. Undo survives
+restarts until you dismiss it or delete another note.
+
 Hitr starts with only the floating icon. Use the existing **`</>`** button in
 the note header to open APIs; the note saves and collapses as the API window
 opens. **Back to notes** returns to your note and keeps the API workspace ready

@@ -364,6 +364,15 @@ pub async fn select_note(id: &str) -> Result<NotesBook, String> {
 pub async fn save_note(id: &str, text: &str, title: &str) -> Result<(), String> {
     call_unit("save_note", NoteArgs { id, text, title }).await
 }
+pub async fn delete_note(id: &str, text: &str, title: &str) -> Result<NotesBook, String> {
+    call("delete_note", NoteArgs { id, text, title }).await
+}
+pub async fn restore_deleted_note() -> Result<NotesBook, String> {
+    call("restore_deleted_note", Empty {}).await
+}
+pub async fn dismiss_deleted_note() -> Result<NotesBook, String> {
+    call("dismiss_deleted_note", Empty {}).await
+}
 pub async fn resize_notes(expanded: bool) -> Result<(), String> {
     #[derive(Serialize)]
     struct Args {

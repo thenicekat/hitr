@@ -10,11 +10,21 @@ pub struct SavedNote {
     pub html: String,
 }
 #[derive(Serialize, Deserialize)]
+pub struct DeletedNote {
+    pub note: SavedNote,
+    pub index: usize,
+    pub replacement_id: Option<String>,
+}
+#[derive(Serialize, Deserialize)]
 pub struct NotesBook {
     pub active_id: String,
     pub notes: Vec<SavedNote>,
     #[serde(default = "already_onboarded")]
     pub onboarding_complete: bool,
+    #[serde(default)]
+    pub focus_imported: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_note: Option<DeletedNote>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
 }
@@ -52,6 +62,8 @@ fn read(path: &Path) -> Result<NotesBook, String> {
             Ok(NotesBook {
                 active_id: "1".into(),
                 onboarding_complete: has_existing_data(path)?,
+                focus_imported: false,
+                deleted_note: None,
                 warning: None,
                 notes: vec![SavedNote {
                     id: "1".into(),
@@ -101,9 +113,18 @@ fn finish_onboarding_at(path: &Path) -> Result<(), String> {
 }
 
 // Keep tasks created in the earlier Focus experiment as ordinary actionable
-// lines. The original file is retained, and a stable note ID makes this one-shot.
+// lines. Remember the import separately so deleting the note cannot reimport it.
 fn import_focus_tasks(path: &Path, book: &mut NotesBook) -> Result<(), String> {
-    if book.notes.iter().any(|note| note.id == "focus-import") {
+    if book.focus_imported {
+        return Ok(());
+    }
+    if book.notes.iter().any(|note| note.id == "focus-import")
+        || book
+            .deleted_note
+            .as_ref()
+            .is_some_and(|deleted| deleted.note.id == "focus-import")
+    {
+        book.focus_imported = true;
         return Ok(());
     }
     #[derive(Deserialize)]
@@ -149,6 +170,7 @@ fn import_focus_tasks(path: &Path, book: &mut NotesBook) -> Result<(), String> {
         title: "Things to do".into(),
         html,
     });
+    book.focus_imported = true;
     Ok(())
 }
 #[tauri::command]
@@ -188,29 +210,306 @@ pub fn select_note(id: String) -> Result<NotesBook, String> {
 #[tauri::command]
 pub fn create_note() -> Result<NotesBook, String> {
     let _lock = LOCK.lock().map_err(|e| e.to_string())?;
-    let path = path()?;
-    let mut book = read(&path)?;
-    let id = (book
+    create_note_at(&path()?)
+}
+
+fn blank_note(book: &NotesBook) -> Result<SavedNote, String> {
+    // Reserve the deleted note's ID until Undo is consumed or dismissed.
+    let id = book
         .notes
         .iter()
+        .chain(book.deleted_note.iter().map(|deleted| &deleted.note))
         .filter_map(|n| n.id.parse::<u64>().ok())
         .max()
         .unwrap_or(0)
-        + 1)
-    .to_string();
-    book.notes.push(SavedNote {
-        id: id.clone(),
+        .checked_add(1)
+        .ok_or("Could not allocate a note ID")?
+        .to_string();
+    Ok(SavedNote {
+        id,
         title: "Untitled".into(),
         html: String::new(),
+    })
+}
+
+fn create_note_at(path: &Path) -> Result<NotesBook, String> {
+    let mut book = read(path)?;
+    let note = blank_note(&book)?;
+    book.active_id = note.id.clone();
+    book.notes.push(note);
+    write(path, &book)?;
+    Ok(book)
+}
+
+#[tauri::command]
+pub fn delete_note(id: String, text: String, title: String) -> Result<NotesBook, String> {
+    let _lock = LOCK.lock().map_err(|e| e.to_string())?;
+    delete_note_at(&path()?, &id, text, title)
+}
+
+fn delete_note_at(path: &Path, id: &str, html: String, title: String) -> Result<NotesBook, String> {
+    let mut book = read(path)?;
+    // Capture the latest draft and delete it in one write, including reminders.
+    update(&mut book, id, html, title)?;
+    let index = book
+        .notes
+        .iter()
+        .position(|note| note.id == id)
+        .ok_or("Note not found")?;
+    let note = book.notes.remove(index);
+    book.focus_imported |= note.id == "focus-import";
+    book.deleted_note = Some(DeletedNote {
+        note,
+        index,
+        replacement_id: None,
     });
-    book.active_id = id;
-    write(&path, &book)?;
+    if book.notes.is_empty() {
+        let replacement = blank_note(&book)?;
+        if let Some(deleted) = book.deleted_note.as_mut() {
+            deleted.replacement_id = Some(replacement.id.clone());
+        }
+        book.active_id = replacement.id.clone();
+        book.notes.push(replacement);
+    } else if book.active_id == id {
+        book.active_id = book.notes[index.min(book.notes.len() - 1)].id.clone();
+    }
+    write(path, &book)?;
+    Ok(book)
+}
+
+#[tauri::command]
+pub fn restore_deleted_note() -> Result<NotesBook, String> {
+    let _lock = LOCK.lock().map_err(|e| e.to_string())?;
+    restore_deleted_note_at(&path()?)
+}
+
+fn restore_deleted_note_at(path: &Path) -> Result<NotesBook, String> {
+    let mut book = read(path)?;
+    let deleted = book
+        .deleted_note
+        .take()
+        .ok_or("No deleted note to restore")?;
+    if book.notes.iter().any(|note| note.id == deleted.note.id) {
+        return Err("A note with that ID already exists".into());
+    }
+    // Remove only an untouched placeholder created by deleting the last note.
+    book.notes.retain(|note| {
+        Some(&note.id) != deleted.replacement_id.as_ref()
+            || !note.html.is_empty()
+            || note.title != "Untitled"
+    });
+    book.active_id = deleted.note.id.clone();
+    book.notes
+        .insert(deleted.index.min(book.notes.len()), deleted.note);
+    write(path, &book)?;
+    Ok(book)
+}
+
+#[tauri::command]
+pub fn dismiss_deleted_note() -> Result<NotesBook, String> {
+    let _lock = LOCK.lock().map_err(|e| e.to_string())?;
+    dismiss_deleted_note_at(&path()?)
+}
+
+fn dismiss_deleted_note_at(path: &Path) -> Result<NotesBook, String> {
+    let mut book = read(path)?;
+    book.deleted_note = None;
+    write(path, &book)?;
     Ok(book)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn seed_book(path: &Path, ids: &[&str], active: &str) {
+        let mut book = read(path).unwrap();
+        book.onboarding_complete = true;
+        book.active_id = active.into();
+        book.notes = ids
+            .iter()
+            .map(|id| SavedNote {
+                id: (*id).into(),
+                title: format!("Note {id}"),
+                html: format!("<p>Note {id}</p>"),
+            })
+            .collect();
+        write(path, &book).unwrap();
+    }
+
+    #[test]
+    fn delete_and_undo_preserve_latest_drafts_reminders_and_note_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.json");
+        seed_book(&path, &["1", "2", "3"], "2");
+        let draft = "<h2>Latest draft</h2><div data-task-id=\"task\" data-remind-at=\"1900000000000\">Send it</div>";
+        let deleted = delete_note_at(&path, "2", draft.into(), "Latest draft".into()).unwrap();
+        assert_eq!(deleted.active_id, "3");
+        assert_eq!(deleted.notes.len(), 2);
+        assert!(deleted.notes.iter().all(|note| note.id != "2"));
+        assert!(deleted.onboarding_complete);
+
+        // Read from disk to simulate relaunch, then edit the neighbor before Undo.
+        let mut reloaded = read(&path).unwrap();
+        assert!(update(&mut reloaded, "2", "stale save".into(), "Stale".into()).is_err());
+        update(
+            &mut reloaded,
+            "3",
+            "<p>New work</p>".into(),
+            "New work".into(),
+        )
+        .unwrap();
+        write(&path, &reloaded).unwrap();
+        let restored = restore_deleted_note_at(&path).unwrap();
+        assert_eq!(restored.active_id, "2");
+        assert_eq!(
+            restored
+                .notes
+                .iter()
+                .map(|note| note.id.as_str())
+                .collect::<Vec<_>>(),
+            ["1", "2", "3"]
+        );
+        assert_eq!(restored.notes[1].title, "Latest draft");
+        assert_eq!(restored.notes[1].html, draft);
+        assert_eq!(restored.notes[2].html, "<p>New work</p>");
+        assert!(read(&path).unwrap().deleted_note.is_none());
+    }
+
+    #[test]
+    fn delete_last_selects_previous_and_new_notes_do_not_reuse_undo_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.json");
+        seed_book(&path, &["1", "2"], "2");
+        let deleted = delete_note_at(&path, "2", "Keep me".into(), "Second".into()).unwrap();
+        assert_eq!(deleted.active_id, "1");
+        let created = create_note_at(&path).unwrap();
+        assert_eq!(created.active_id, "3");
+        let restored = restore_deleted_note_at(&path).unwrap();
+        assert_eq!(restored.notes.len(), 3);
+        assert_eq!(restored.notes[1].id, "2");
+        assert_eq!(restored.notes[1].html, "Keep me");
+        assert_eq!(restored.notes[2].id, "3");
+    }
+
+    #[test]
+    fn deleting_only_note_creates_blank_and_undo_removes_only_that_blank() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.json");
+        seed_book(&path, &["1"], "1");
+        let deleted = delete_note_at(&path, "1", "Original".into(), "Original".into()).unwrap();
+        assert_eq!(deleted.notes.len(), 1);
+        assert_ne!(deleted.active_id, "1");
+        assert!(deleted.notes[0].html.is_empty());
+        let restored = restore_deleted_note_at(&path).unwrap();
+        assert_eq!(restored.notes.len(), 1);
+        assert_eq!(restored.active_id, "1");
+        assert_eq!(restored.notes[0].html, "Original");
+
+        delete_note_at(&path, "1", "Original".into(), "Original".into()).unwrap();
+        let created = create_note_at(&path).unwrap();
+        let intentional_blank = created.active_id;
+        let restored = restore_deleted_note_at(&path).unwrap();
+        assert_eq!(restored.notes.len(), 2);
+        assert!(restored
+            .notes
+            .iter()
+            .any(|note| note.id == intentional_blank));
+    }
+
+    #[test]
+    fn undo_keeps_work_typed_into_the_replacement_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.json");
+        seed_book(&path, &["1"], "1");
+        let mut deleted = delete_note_at(&path, "1", "Original".into(), "Original".into()).unwrap();
+        let replacement = deleted.active_id.clone();
+        update(
+            &mut deleted,
+            &replacement,
+            "New thought".into(),
+            "New thought".into(),
+        )
+        .unwrap();
+        write(&path, &deleted).unwrap();
+        let restored = restore_deleted_note_at(&path).unwrap();
+        assert_eq!(restored.active_id, "1");
+        assert_eq!(restored.notes.len(), 2);
+        assert_eq!(restored.notes[0].html, "Original");
+        assert_eq!(restored.notes[1].html, "New thought");
+    }
+
+    #[test]
+    fn undo_restores_only_latest_deletion_and_dismissal_survives_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.json");
+        seed_book(&path, &["1", "2", "3"], "2");
+        delete_note_at(&path, "2", "Second".into(), "Second".into()).unwrap();
+        delete_note_at(&path, "3", "Third".into(), "Third".into()).unwrap();
+        let restored = restore_deleted_note_at(&path).unwrap();
+        assert_eq!(restored.active_id, "3");
+        assert!(restored.notes.iter().all(|note| note.id != "2"));
+        delete_note_at(&path, "3", "Third".into(), "Third".into()).unwrap();
+        dismiss_deleted_note_at(&path).unwrap();
+        assert!(read(&path).unwrap().deleted_note.is_none());
+        let before = std::fs::read(&path).unwrap();
+        assert!(restore_deleted_note_at(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn invalid_deletes_and_undo_conflicts_do_not_overwrite_notes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.json");
+        seed_book(&path, &["1", "2"], "1");
+        let before = std::fs::read(&path).unwrap();
+        assert!(delete_note_at(&path, "missing", "Draft".into(), "Draft".into()).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        let mut deleted = delete_note_at(&path, "2", "Second".into(), "Second".into()).unwrap();
+        assert_eq!(deleted.active_id, "1");
+        deleted.notes.push(SavedNote {
+            id: "2".into(),
+            title: "Conflicting".into(),
+            html: "Keep this".into(),
+        });
+        write(&path, &deleted).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        assert!(restore_deleted_note_at(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+
+        std::fs::write(&path, "broken json").unwrap();
+        assert!(delete_note_at(&path, "1", "Draft".into(), "Draft".into()).is_err());
+        assert!(restore_deleted_note_at(&path).is_err());
+        assert!(dismiss_deleted_note_at(&path).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "broken json");
+    }
+
+    #[test]
+    fn deleted_focus_import_stays_deleted_after_undo_is_dismissed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.json");
+        let legacy = dir.path().join("focus.json");
+        let source = r#"{"tasks":[{"id":1,"title":"Legacy task","completed_at":null}]}"#;
+        std::fs::write(&legacy, source).unwrap();
+        let mut book = read(&path).unwrap();
+        import_focus_tasks(&legacy, &mut book).unwrap();
+        write(&path, &book).unwrap();
+        delete_note_at(&path, "focus-import", "Legacy task".into(), "Tasks".into()).unwrap();
+        dismiss_deleted_note_at(&path).unwrap();
+        let mut loaded = read(&path).unwrap();
+        import_focus_tasks(&legacy, &mut loaded).unwrap();
+        assert_eq!(loaded.notes.len(), 1);
+        assert!(loaded.focus_imported);
+        assert_eq!(std::fs::read_to_string(&legacy).unwrap(), source);
+
+        // Books from before the marker existed also remember an existing import.
+        let old = r#"{"active_id":"focus-import","notes":[{"id":"focus-import","title":"Tasks","html":"Task"}]}"#;
+        std::fs::write(&path, old).unwrap();
+        let mut loaded = read(&path).unwrap();
+        import_focus_tasks(&legacy, &mut loaded).unwrap();
+        assert!(loaded.focus_imported);
+        assert_eq!(loaded.notes.len(), 1);
+    }
 
     #[test]
     fn new_install_resumes_onboarding_until_finished_without_changing_notes() {

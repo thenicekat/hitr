@@ -187,11 +187,17 @@ pub struct SavedNote {
     pub html: String,
 }
 #[derive(serde::Deserialize)]
+pub struct DeletedNote {
+    pub note: SavedNote,
+}
+#[derive(serde::Deserialize)]
 pub struct NotesBook {
     pub active_id: String,
     pub notes: Vec<SavedNote>,
     #[serde(default = "already_onboarded")]
     pub onboarding_complete: bool,
+    #[serde(default)]
+    pub deleted_note: Option<DeletedNote>,
     #[serde(default)]
     pub warning: Option<String>,
 }

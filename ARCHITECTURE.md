@@ -30,6 +30,15 @@ registered, and no per-second disk writes are needed.
 Focus queue into a note once, leaving the source file intact. A failed optional
 import returns a visible warning without preventing access to existing notes.
 
+Deletion captures the current draft and its original position in a single
+`deleted_note` record in `notes.json`, alongside the remaining notes, in one
+atomic write. Undo reserves that note's ID and inserts it into the current
+book rather than replacing the book with an older snapshot. An untouched blank
+created after deleting the final note is removed on Undo; edited replacements
+are retained. The undo record survives relaunch and is cleared by restoration,
+dismissal, or the next deletion. `focus_imported` records legacy migration
+independently of the imported note so deletion cannot bring old tasks back.
+
 `src/onboarding.rs` renders the three-step walkthrough inside the expanded
 notes window, before the first editor mounts. Its checkbox, glow, and API
 previews use component state only. `notes.json` records `onboarding_complete`;

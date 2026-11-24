@@ -5,6 +5,14 @@ use dioxus::prelude::*;
 static THEME: Asset = asset!("/assets/theme.css");
 static CSS: Asset = asset!("/assets/notes.css");
 
+enum NoteAction {
+    Select(String),
+    Create,
+    Delete,
+    Restore,
+    DismissUndo,
+}
+
 #[derive(Clone, serde::Deserialize)]
 struct ActionLine {
     id: String,
@@ -35,6 +43,7 @@ pub fn Notes() -> Element {
     let mut now = use_signal(|| js_sys::Date::now() as u64);
     let mut window_error = use_signal(|| None::<String>);
     let mut notes = use_signal(Vec::<crate::types::SavedNote>::new);
+    let mut deleted_title = use_signal(|| None::<String>);
     let mut active_id = use_signal(String::new);
     let mut preferences = use_signal(crate::types::NotesPreferences::default);
     let mut preferences_ready = use_signal(|| false);
@@ -69,6 +78,7 @@ pub fn Notes() -> Element {
                 text.set(note.html.clone());
                 saved.set(note.html.clone());
                 plain_text.set(String::new());
+                deleted_title.set(book.deleted_note.map(|deleted| deleted.note.title));
                 notes.set(book.notes);
                 ready.set(true);
                 status.set("Saved".into());
@@ -78,34 +88,54 @@ pub fn Notes() -> Element {
         });
     });
 
-    let change_note = use_callback(move |target: Option<String>| {
+    let change_note = use_callback(move |action: NoteAction| {
         if *busy.peek() || !*ready.peek() {
             return;
         }
-        if target.as_ref() == Some(&*active_id.peek()) {
+        if matches!(&action, NoteAction::Select(id) if id == &*active_id.peek()) {
             return;
         }
         busy.set(true);
         ready.set(false);
+        settings.set(false);
         let id = active_id();
         let html = text();
-        let title = note_title(&plain_text());
+        let title = notes
+            .peek()
+            .iter()
+            .find(|note| note.id == id)
+            .map(|note| note.title.clone())
+            .unwrap_or_else(|| note_title(&plain_text()));
         let dirty = html != saved();
+        let failure = match &action {
+            NoteAction::Select(_) | NoteAction::Create => "Couldn't switch notes",
+            NoteAction::Delete => "Couldn't delete note",
+            NoteAction::Restore => "Couldn't restore note",
+            NoteAction::DismissUndo => "Couldn't dismiss Undo",
+        };
         spawn(async move {
             let result = async {
-                if dirty {
+                // Delete captures this draft atomically. Other transitions save
+                // it first, so Undo never overwrites work in the current note.
+                if dirty && !matches!(&action, NoteAction::Delete) {
                     api::save_note(&id, &html, &title).await?;
                 }
-                match target {
-                    Some(id) => api::select_note(&id).await,
-                    None => api::create_note().await,
+                match action {
+                    NoteAction::Select(id) => api::select_note(&id).await,
+                    NoteAction::Create => api::create_note().await,
+                    NoteAction::Delete => api::delete_note(&id, &html, &title).await,
+                    NoteAction::Restore => api::restore_deleted_note().await,
+                    NoteAction::DismissUndo => api::dismiss_deleted_note().await,
                 }
             }
             .await;
             match result {
-                Ok(book) => apply_book.call(book),
+                Ok(book) => {
+                    window_error.set(None);
+                    apply_book.call(book);
+                }
                 Err(e) => {
-                    status.set(format!("Couldn't switch notes: {e}"));
+                    window_error.set(Some(format!("{failure}: {e}")));
                     ready.set(true);
                 }
             }
@@ -317,7 +347,7 @@ pub fn Notes() -> Element {
                     onclick: move |_| {
                         if let Some((note_id, line)) = first_due.clone() {
                             reveal_line.set(Some(line.id));
-                            change_note.call(Some(note_id));
+                            change_note.call(NoteAction::Select(note_id));
                         }
                         spawn(async move {
                             match api::resize_notes(true).await {
@@ -349,7 +379,7 @@ pub fn Notes() -> Element {
                                 disabled: !ready() || busy(),
                                 onchange: move |e| {
                                     reveal_line.set(None);
-                                    change_note.call(Some(e.value()));
+                                    change_note.call(NoteAction::Select(e.value()));
                                 },
                                 for note in notes().iter() {
                                     option { key: "{note.id}", value: "{note.id}", "{note.title}" }
@@ -363,7 +393,7 @@ pub fn Notes() -> Element {
                             disabled: !ready() || busy(),
                             onclick: move |_| {
                                 reveal_line.set(None);
-                                change_note.call(None);
+                                change_note.call(NoteAction::Create);
                             },
                             "+"
                         }
@@ -388,8 +418,8 @@ pub fn Notes() -> Element {
                         }
                         button {
                             class: "settings-button",
-                            title: "Preferences",
-                            aria_label: "Preferences",
+                            title: "Note options",
+                            aria_label: "Note options",
                             aria_expanded: "{settings}",
                             onclick: move |_| settings.set(!settings()),
                             "···"
@@ -480,6 +510,17 @@ pub fn Notes() -> Element {
                                     "Done"
                                 }
                             }
+                            div { class: "note-actions",
+                                button {
+                                    class: "delete-note",
+                                    disabled: !ready() || busy() || preferences_busy(),
+                                    onclick: move |_| {
+                                        reveal_line.set(None);
+                                        change_note.call(NoteAction::Delete);
+                                    },
+                                    "Delete note"
+                                }
+                            }
                         }
                     }
                     if ready() {
@@ -518,6 +559,31 @@ pub fn Notes() -> Element {
                             }
                         }
                     }
+                    if let Some(title) = deleted_title() {
+                        div { class: "note-deleted",
+                            span { class: "note-deleted-message", role: "status", title: "Deleted: {title}",
+                                "Note deleted"
+                            }
+                            button {
+                                class: "undo-delete",
+                                disabled: !ready() || busy(),
+                                title: "Restore {title}",
+                                onclick: move |_| {
+                                    reveal_line.set(None);
+                                    change_note.call(NoteAction::Restore);
+                                },
+                                "Undo"
+                            }
+                            button {
+                                class: "dismiss-undo",
+                                aria_label: "Dismiss undo",
+                                title: "Dismiss undo",
+                                disabled: !ready() || busy(),
+                                onclick: move |_| change_note.call(NoteAction::DismissUndo),
+                                "×"
+                            }
+                        }
+                    }
                     footer {
                         span { class: "status", "{status}" }
                         if let Some((note_id, line)) = footer_due {
@@ -532,7 +598,7 @@ pub fn Notes() -> Element {
                                             "setTimeout(() => document.getElementById('note-editor')?.dispatchEvent(new Event('hitr-reveal-line')), 0);",
                                         );
                                     } else {
-                                        change_note.call(Some(note_id.clone()));
+                                        change_note.call(NoteAction::Select(note_id.clone()));
                                     }
                                 },
                                 "{due_count} due"
