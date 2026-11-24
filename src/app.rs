@@ -423,6 +423,18 @@ pub fn App() -> Element {
             // header
             div { class: "topbar",
                 span { class: "brand", "hitr" }
+                button {
+                    class: "btn ghost",
+                    title: "Return to your note",
+                    onclick: move |_| {
+                        spawn(async move {
+                            if let Err(e) = api::open_notes_workspace().await {
+                                error.set(Some(format!("Couldn't open notes: {e}")));
+                            }
+                        });
+                    },
+                    "Back to notes"
+                }
                 if *editing_root.read() {
                     input {
                         class: "root-input",
@@ -843,6 +855,18 @@ fn UnlockModal(exists: bool, on_unlocked: EventHandler<()>) -> Element {
                 }
                 if let Some(e) = err.read().as_ref() { div { class: "error", "{e}" } }
                 div { class: "modal-actions",
+                    button {
+                        class: "btn ghost",
+                        disabled: unlocking(),
+                        onclick: move |_| {
+                            spawn(async move {
+                                if let Err(e) = api::open_notes_workspace().await {
+                                    err.set(Some(format!("Couldn't open notes: {e}")));
+                                }
+                            });
+                        },
+                        "Back to notes"
+                    }
                     button { class: "btn primary", disabled: *unlocking.read(), onclick: move |_| submit(),
                         if *unlocking.read() { "Unlocking…" } else if exists { "unlock" } else { "create" }
                     }

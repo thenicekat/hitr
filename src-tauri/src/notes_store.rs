@@ -13,6 +13,8 @@ pub struct SavedNote {
 pub struct NotesBook {
     pub active_id: String,
     pub notes: Vec<SavedNote>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 fn read(path: &Path) -> Result<NotesBook, String> {
@@ -22,6 +24,7 @@ fn read(path: &Path) -> Result<NotesBook, String> {
             let html = super::read_note(&path.with_file_name("quick-note.txt"))?;
             Ok(NotesBook {
                 active_id: "1".into(),
+                warning: None,
                 notes: vec![SavedNote {
                     id: "1".into(),
                     title: "Scratchpad".into(),
@@ -50,9 +53,63 @@ fn path() -> Result<std::path::PathBuf, String> {
 pub fn load_notes() -> Result<NotesBook, String> {
     let _lock = LOCK.lock().map_err(|e| e.to_string())?;
     let path = path()?;
-    let book = read(&path)?;
+    let mut book = read(&path)?;
+    let warning = import_focus_tasks(&path.with_file_name("focus.json"), &mut book).err();
     write(&path, &book)?;
+    book.warning = warning;
     Ok(book)
+}
+
+// Keep tasks created in the earlier Focus experiment as ordinary actionable
+// lines. The original file is retained, and a stable note ID makes this one-shot.
+fn import_focus_tasks(path: &Path, book: &mut NotesBook) -> Result<(), String> {
+    if book.notes.iter().any(|note| note.id == "focus-import") {
+        return Ok(());
+    }
+    #[derive(Deserialize)]
+    struct LegacyTask {
+        id: u64,
+        title: String,
+        completed_at: Option<u64>,
+    }
+    #[derive(Deserialize)]
+    struct LegacyBoard {
+        tasks: Vec<LegacyTask>,
+    }
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("Could not import old Focus tasks: {error}")),
+    };
+    let board: LegacyBoard = serde_json::from_slice(&bytes).map_err(|error| {
+        format!("Could not import old Focus tasks; focus.json was left unchanged: {error}")
+    })?;
+    if board.tasks.is_empty() {
+        return Ok(());
+    }
+    let mut html = String::from("<h2>Things to do</h2>");
+    for task in board.tasks {
+        let text = task
+            .title
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        let done = if task.completed_at.is_some() {
+            " data-done=\"true\""
+        } else {
+            ""
+        };
+        html.push_str(&format!(
+            "<div data-task-id=\"imported-{}\"{done}>{text}</div>",
+            task.id
+        ));
+    }
+    book.notes.push(SavedNote {
+        id: "focus-import".into(),
+        title: "Things to do".into(),
+        html,
+    });
+    Ok(())
 }
 #[tauri::command]
 pub fn save_note(id: String, text: String, title: String) -> Result<(), String> {
@@ -134,5 +191,55 @@ mod tests {
         assert_eq!(loaded.notes[0].html, "<b>Existing</b>");
         assert_eq!(loaded.notes[1].html, "<h2>Second</h2>");
         assert!(update(&mut book, "missing", "oops".into(), "Oops".into()).is_err());
+    }
+
+    #[test]
+    fn imports_focus_tasks_once_without_changing_notes_or_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let notes_path = dir.path().join("notes.json");
+        let focus_path = dir.path().join("focus.json");
+        let source = r#"{"tasks":[{"id":1,"title":"Check <draft> & send","completed_at":null},{"id":2,"title":"Finished","completed_at":100}]}"#;
+        std::fs::write(&focus_path, source).unwrap();
+        let mut book = read(&notes_path).unwrap();
+        update(
+            &mut book,
+            "1",
+            "<b>My existing note</b>".into(),
+            "My note".into(),
+        )
+        .unwrap();
+        import_focus_tasks(&focus_path, &mut book).unwrap();
+        write(&notes_path, &book).unwrap();
+        let mut loaded = read(&notes_path).unwrap();
+        import_focus_tasks(&focus_path, &mut loaded).unwrap();
+        assert_eq!(loaded.notes.len(), 2);
+        assert_eq!(loaded.notes[0].html, "<b>My existing note</b>");
+        assert_eq!(loaded.active_id, "1");
+        assert!(loaded.notes[1]
+            .html
+            .contains("Check &lt;draft&gt; &amp; send"));
+        assert!(loaded.notes[1]
+            .html
+            .contains("data-task-id=\"imported-2\" data-done=\"true\""));
+        assert_eq!(std::fs::read_to_string(focus_path).unwrap(), source);
+    }
+
+    #[test]
+    fn reminder_attributes_round_trip_and_bad_imports_leave_notes_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.json");
+        let mut book = read(&path).unwrap();
+        let html =
+            "<div data-task-id=\"line-123\" data-remind-at=\"1900000000000\">Send update</div>";
+        update(&mut book, "1", html.into(), "Send update".into()).unwrap();
+        write(&path, &book).unwrap();
+        let loaded = read(&path).unwrap();
+        assert_eq!(loaded.notes[0].html, html);
+        let legacy = dir.path().join("focus.json");
+        std::fs::write(&legacy, "broken json").unwrap();
+        assert!(import_focus_tasks(&legacy, &mut book).is_err());
+        assert_eq!(book.notes.len(), 1);
+        assert_eq!(book.notes[0].html, html);
+        assert_eq!(std::fs::read_to_string(legacy).unwrap(), "broken json");
     }
 }

@@ -791,27 +791,73 @@ fn move_notes(window: tauri::WebviewWindow, x: i32, y: i32) -> Result<(), String
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-async fn open_api_workspace(app: AppHandle) -> Result<(), String> {
-    let window = match app.get_webview_window("main") {
-        Some(window) => window,
+fn workspace_window(app: &AppHandle, label: &str) -> Result<tauri::WebviewWindow, String> {
+    match app.get_webview_window(label) {
+        Some(window) => Ok(window),
         None => {
             let config = app
                 .config()
                 .app
                 .windows
                 .iter()
-                .find(|window| window.label == "main")
-                .ok_or("API window configuration not found")?;
-            tauri::WebviewWindowBuilder::from_config(&app, config)
+                .find(|window| window.label == label)
+                .ok_or("Window configuration not found")?;
+            tauri::WebviewWindowBuilder::from_config(app, config)
                 .map_err(|e| e.to_string())?
+                .visible(false)
+                .focused(false)
                 .build()
-                .map_err(|e| e.to_string())?
+                .map_err(|e| e.to_string())
         }
-    };
+    }
+}
+
+fn configure_notes_window(notes: &tauri::WebviewWindow) -> Result<(), String> {
+    let preferences = load_notes_preferences().unwrap_or_default();
+    notes
+        .set_always_on_top(preferences.always_on_top)
+        .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    {
+        let window = notes.clone();
+        notes
+            .run_on_main_thread(move || {
+                use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
+                if let Ok(handle) = window.ns_window() {
+                    // Tauri owns this NSWindow; AppKit access stays on its main thread.
+                    let native = unsafe { &*(handle as *const NSWindow) };
+                    native.setCollectionBehavior(
+                        native.collectionBehavior()
+                            | NSWindowCollectionBehavior::FullScreenAuxiliary,
+                    );
+                }
+            })
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn open_api_workspace(app: AppHandle) -> Result<(), String> {
+    let window = workspace_window(&app, "main")?;
     window.show().map_err(|e| e.to_string())?;
     window.unminimize().map_err(|e| e.to_string())?;
     window.set_focus().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn open_notes_workspace(app: AppHandle) -> Result<(), String> {
+    let notes = workspace_window(&app, "notes")?;
+    configure_notes_window(&notes)?;
+    resize_notes(notes.clone(), true)?;
+    notes.show().map_err(|e| e.to_string())?;
+    notes.unminimize().map_err(|e| e.to_string())?;
+    notes.set_focus().map_err(|e| e.to_string())?;
+    // Hiding keeps the selected request, response, and edits available on return.
+    if let Some(apis) = app.get_webview_window("main") {
+        apis.hide().map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -820,7 +866,7 @@ fn resize_notes(window: tauri::WebviewWindow, expanded: bool) -> Result<(), Stri
         return Err("Only the notes window can be resized".into());
     }
     let (width, height) = if expanded {
-        (360.0, 400.0)
+        (380.0, 520.0)
     } else {
         (76.0, 76.0)
     };
@@ -856,17 +902,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             if let Some(notes) = app.get_webview_window("notes") {
-                let preferences = load_notes_preferences().unwrap_or_default();
-                notes.set_always_on_top(preferences.always_on_top)?;
-            }
-            #[cfg(target_os = "macos")]
-            if let Some(notes) = app.get_webview_window("notes") {
-                use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
-                // Setup runs on the main thread and Tauri owns this NSWindow.
-                let native = unsafe { &*(notes.ns_window()? as *const NSWindow) };
-                native.setCollectionBehavior(
-                    native.collectionBehavior() | NSWindowCollectionBehavior::FullScreenAuxiliary,
-                );
+                configure_notes_window(&notes)?;
             }
             #[cfg(target_os = "macos")]
             app.handle()
@@ -896,6 +932,7 @@ pub fn run() {
             notes_store::select_note,
             resize_notes,
             open_api_workspace,
+            open_notes_workspace,
             notes_drag_origin,
             move_notes,
             get_root,

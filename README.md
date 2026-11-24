@@ -1,18 +1,51 @@
 # hitr
 
-Hitr is a native REST API client for macOS with plain-text YAML collections, cURL and OpenAPI import, and a local MCP server for agents. Built with Rust, Tauri, and Dioxus.
+Hitr is a native macOS workspace for API requests and notes with quiet reminders. Its API client supports plain-text YAML collections, cURL and OpenAPI import, and a local MCP server for agents. Built with Rust, Tauri, and Dioxus.
 
-Built because heavyweight Electron clients are slow and cloud-first tools want your data on their servers. This does one thing: read a collection off disk, edit envs, fire requests. Nothing else.
+Built because heavyweight Electron clients are slow and cloud-first tools want your data on their servers. Keep API work, quick notes, and your next task close at hand, with local storage and no cloud account.
 
 ## Status
 
 **MVP.** macOS-tested. Cross-platform in principle (age-encrypted vault, no OS-specific deps) but only tested on macOS.
 
-## Floating notes experiment
+## Notes with quiet reminders
 
-Hitr also opens a small floating notes button. Click to open it or drag the whole button to move it. The note switcher selects a saved note; **+** saves the current note and creates a new one. Notes autosave and support bold, italic, underline, headings, and lists. Titles come from the first non-empty line.
+Hitr opens a small floating notes button. Click to open it or drag the whole
+button to move it. Write freely, then turn any actionable line into a checkbox
+using the toolbar or **⌘⇧L**. Notes, context, and things to do share the same page.
 
-Use **···** for appearance, text size, and stay-on-top preferences. Appearance is shared with the API workspace, which also has a light/dark switch in its toolbar. Notes and their last selected ID are stored in `notes.json` under the local Hitr application data directory. Existing quick-note files are imported on first use and retained. Notes are plain HTML within the JSON file, separate from the encrypted secrets vault.
+Use the bell in the toolbar, or **Remind** beside a checkbox, to set a reminder
+for that line. Choose 5, 15, 30, or 60 minutes, or a specific local date and time.
+When a reminder is due, the **whole floating icon glows softly**. There is no
+flashing, sound, or notification popup. Clicking the icon opens the relevant
+note and highlights the due line. The footer also links to due reminders.
+
+Open **Remind** again to move the reminder to a later time or **Clear reminder**.
+Checking off a line clears its reminder. Simply viewing a reminder does not
+complete the task or dismiss it. Reminders from every saved note contribute to
+the glow, including notes you are not currently viewing.
+
+The note switcher selects a saved note; **+** saves the current note and creates
+a new one. Notes autosave and support bold, italic, underline, headings, and
+lists. Titles come from the first non-empty line. Use **···** for appearance,
+text size, and stay-on-top preferences. Appearance is shared with the API
+workspace.
+
+Hitr starts with only the floating icon. Use the existing **`</>`** button in
+the note header to open APIs; the note saves and collapses as the API window
+opens. **Back to notes** returns to your note and keeps the API workspace ready
+for next time. You can return from the vault unlock screen without unlocking it.
+Reminder times sit beside their task as a quiet, clickable time label.
+
+Notes, line IDs, completion state, and reminder times are stored together in
+`notes.json` under the local Hitr application data directory. Notes are plain
+HTML in JSON, separate from the encrypted secrets vault. Reminder times survive
+restarts; overdue reminders glow when Hitr is running again. Hitr must be
+running for the icon to show a reminder—it does not schedule system alarms.
+
+Existing quick-note files are imported on first use and retained. Tasks from
+the earlier separate Focus experiment are imported once into a **Things to do**
+note, preserving completion state and leaving the original `focus.json` intact.
 
 ## Features
 

@@ -7,6 +7,29 @@ Two Rust crates in one workspace:
 
 They communicate via Tauri's IPC bridge — the frontend calls Rust functions marked `#[tauri::command]` through `invoke("cmd_name", args)`.
 
+## Notes and reminders
+
+The floating window is `src/notes.rs`. A note is still rich-text HTML, with
+stable `data-task-id` attributes on actionable blocks and optional
+`data-done` / `data-remind-at` attributes. There is no separate task database:
+editing or deleting the line also edits or deletes its reminder.
+
+`assets/note-content.js` sanitizes the HTML and derives an outline of action
+lines. The editor and the notebook-wide reminder index use that same parser.
+`assets/note-editor.js` adds transient checkbox/reminder controls, which the
+sanitizer excludes from saved HTML. It disposes document listeners and timers
+when the editor unmounts.
+
+The frontend compares persisted deadlines with the current wall clock. A due
+line in any note lights the whole floating icon. Opening it selects the source
+note and reveals the line; only completion, clearing, or rescheduling handles
+the reminder. Hitr has to be running to display the cue. No system alarm is
+registered, and no per-second disk writes are needed.
+
+`src-tauri/src/notes_store.rs` retains atomic note saves and imports the earlier
+Focus queue into a note once, leaving the source file intact. A failed optional
+import returns a visible warning without preventing access to existing notes.
+
 ```
 ┌────────────────── window (WKWebView on macOS) ─────────────────┐
 │  ┌──── Dioxus WASM ────────────────────────────────────┐       │
@@ -58,12 +81,17 @@ hitr/
 1. Tauri host launches → `run()` in `lib.rs`:
    - reads `~/Library/Application Support/hitr/config.json` for last-known collection root (falls back to `~/collections/default`)
    - constructs `AppState { root, collection: None, vault: locked }`
-   - starts webview → serves `dist/` (built by `dx serve` in dev, `dx bundle` in release)
-2. WebView loads WASM bundle → Dioxus mounts `App`.
-3. `App::use_hook` fires once:
+   - starts the notes window at icon size and keeps the API window hidden → serves `dist/` (built by `dx serve` in dev, `dx bundle` in release)
+2. Each WebView loads the WASM bundle. `?notes=1` mounts `Notes`; the API window mounts `App`.
+3. `App::use_hook` fires once, including while its window is hidden:
    - `install_input_attrs()` — installs a `MutationObserver` that stamps `autocapitalize=off` on every input as it mounts
    - `load_all()` — Tauri IPC calls: `vault_status` → `get_root` → `load`
-4. If vault has secrets and is locked, `UnlockModal` renders on top of everything, blocking interaction until password entered.
+4. Opening APIs from the note saves pending edits, shows/focuses the API window, and collapses the note to its icon. Save failures leave the draft open.
+5. If the vault is locked, `UnlockModal` blocks API interaction. Its **Back to notes** action works without a password, as does the API toolbar's action once unlocked. `open_notes_workspace` expands/focuses notes and hides APIs, preserving API view state. Both navigation commands recreate their window if it was closed.
+
+The notes component observes the WebView's actual viewport size to synchronize
+its expanded state. A native request to open notes therefore works even if it
+arrives before the frontend mounts; it does not rely on a one-time event.
 
 ## Data flow — firing a request
 
@@ -146,15 +174,22 @@ Not implemented: `-F/--form` (multipart), `-b/--cookie`, `-u/--user` (silently d
 
 ## Adding a new UI feature
 
-The whole UI is `src/app.rs`. Signals live at the top of `App()`. Modals are their own `#[component]`s with an `on_close: EventHandler<()>` prop that reloads the collection.
+The API workspace lives in `src/app.rs`. Signals live at the top of `App()`. Modals are their own `#[component]`s with an `on_close: EventHandler<()>` prop that reloads the collection. The floating workspace lives in `src/notes.rs`; note editing and inline reminder controls live in `assets/note-editor.js`.
 
 For anything performance-sensitive (long lists), extract into a component with `PartialEq`-cheap props (Signals, primitives) so Dioxus can prop-eq skip re-renders.
 
+## Verification
+
+CI runs `cargo fmt --all -- --check`, backend tests, and native/WASM checks and
+Clippy with warnings denied. Run the backend tests with
+`cargo test --manifest-path src-tauri/Cargo.toml`. Note-storage tests use temporary
+directories to check reminder preservation and one-time task migration without
+touching personal data. Editor and rendered-UI smoke checks cover line identity,
+reminder scheduling, expiry, completion, and returning to a due line.
+
 ## What's *not* here (and why)
 
-- No Node / no npm / no bundler. Rust → WASM, styles are one CSS file.
-- No CSS framework, no component library. ~300 lines of hand-CSS.
-- No test suite yet. Add integration tests hitting a local `httpbin` when the surface area justifies it.
-- No CI. Add a GitHub Action that runs `cargo check --target wasm32-unknown-unknown` + `cargo check` on push if the project takes external contributors.
+- No Node / no npm. Rust → WASM through the Dioxus CLI.
+- No CSS framework, no component library. Shared theme tokens and hand-written styles.
 
 The design bias throughout is **cost the feature honestly** — every abstraction, dependency, or config option is one more thing to explain, break, and remove later.

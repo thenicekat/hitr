@@ -13,7 +13,9 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "hitr",
+        "title": "Hitr APIs",
+        "visible": false,
+        "focus": false,
         "width": 1400,
         "height": 900,
         "minWidth": 900,

@@ -180,7 +180,7 @@ impl Default for NotesPreferences {
     }
 }
 
-#[derive(Clone, PartialEq, serde::Deserialize)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SavedNote {
     pub id: String,
     pub title: String,
@@ -190,4 +190,6 @@ pub struct SavedNote {
 pub struct NotesBook {
     pub active_id: String,
     pub notes: Vec<SavedNote>,
+    #[serde(default)]
+    pub warning: Option<String>,
 }

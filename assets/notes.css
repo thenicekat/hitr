@@ -54,3 +54,37 @@ footer { display: flex; align-items: center; justify-content: space-between; fle
 
 .open-apis { display: grid; place-items: center; flex: none; width: 27px; height: 26px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--fg-mute); }
 .open-apis:hover { background: var(--bg3); color: var(--fg); }
+.open-apis:disabled { opacity: .4; cursor: default; }
+
+.workspace-error { display: flex; flex: none; align-items: start; gap: 8px; padding: 10px 15px; color: var(--danger); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.workspace-error button { margin-left: auto; border: 0; background: transparent; color: inherit; }
+
+/* A due reminder lights the whole floating icon. No flashing or sound. */
+.bubble.is-due { background: #f2d47b; border-color: #e5c365; color: #483a18; box-shadow: 0 0 8px 4px #efcd6c66, inset 0 0 12px #fff3c2; }
+.bubble.is-due:hover { background: #f8dfa0; box-shadow: 0 0 9px 5px #efcd6c77, inset 0 0 12px #fff3c2; }
+.format-toolbar button { display: grid; place-items: center; }
+.note-editor .action-line { position: relative; padding-left: 25px; min-height: 1.8em; margin: 4px 0; border-radius: 4px; }
+.note-editor li.action-line { list-style: none; margin-left: -1.5em; }
+.note-editor .line-check { position: absolute; top: .32em; left: 0; display: grid; place-items: center; width: 16px; height: 16px; padding: 0; border: 1px solid var(--fg-mute); border-radius: 4px; background: transparent; color: var(--ok); font: 12px -apple-system, BlinkMacSystemFont, sans-serif; user-select: none; }
+.note-editor .line-check:hover { border-color: var(--ok); background: var(--bg2); }
+.note-editor [data-done="true"] { color: var(--fg-mute); text-decoration: line-through; }
+.note-editor [data-done="true"] .line-check { border-color: var(--ok); text-decoration: none; }
+.note-editor .line-remind { display: inline-block; margin: 0 0 0 8px; padding: 2px 3px; border: 0; border-radius: 4px; background: transparent; color: var(--fg-mute); font: 11px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; font-variant-numeric: tabular-nums; white-space: nowrap; vertical-align: baseline; text-decoration: none; user-select: none; }
+.note-editor .line-remind[hidden] { display: none; }
+.note-editor .line-remind:hover, .note-editor .line-remind:focus-visible { background: var(--bg3); color: var(--fg); }
+.note-editor .reminder-due, .note-editor .reminder-revealed, .note-editor .reminder-selection { background: #d4ae3520; box-shadow: 0 0 0 5px #d4ae3520; }
+.note-editor .reminder-due .line-remind { color: var(--warn); }
+.reminders-due { flex: none; padding: 2px 6px; border: 0; border-radius: 4px; background: #d4ae3520; color: var(--warn); font: inherit; }
+.reminder-popover { position: absolute; z-index: 3; left: 12px; right: 12px; bottom: 38px; padding: 16px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); color: var(--fg); box-shadow: 0 5px 24px var(--shadow); font-size: 12px; }
+.reminder-popover strong { font-size: 14px; font-weight: 600; }
+.reminder-popover p { margin: 7px 0 13px; color: var(--fg-dim); line-height: 1.5; }
+.reminder-popover button, .reminder-popover input { font: inherit; color: var(--fg); }
+.reminder-popover button { padding: 7px 9px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg2); }
+.reminder-popover button:hover { background: var(--bg3); }
+.reminder-popover button:disabled { opacity: .45; cursor: default; }
+.reminder-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.reminder-custom { display: flex; gap: 7px; margin-top: 10px; }
+.reminder-custom input { flex: 1; min-width: 0; padding: 6px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); }
+.reminder-custom input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.reminder-popover-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 12px; }
+.reminder-popover-actions button { border-color: transparent; background: transparent; color: var(--fg-dim); }

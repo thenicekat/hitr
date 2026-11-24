@@ -383,3 +383,7 @@ pub async fn save_notes_preferences(preferences: &NotesPreferences) -> Result<()
 pub async fn open_api_workspace() -> Result<(), String> {
     call_unit("open_api_workspace", Empty {}).await
 }
+
+pub async fn open_notes_workspace() -> Result<(), String> {
+    call_unit("open_notes_workspace", Empty {}).await
+}
