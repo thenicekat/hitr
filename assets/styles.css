@@ -698,4 +698,4 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .theme-to-light { display: none; }
 :root[data-theme="dark"] .theme-to-dark { display: none; }
 :root[data-theme="dark"] .theme-to-light { display: inline; }
-.theme-toggle { min-width: 48px; }
+.btn.icon.theme-toggle { font-size: 18px; }
