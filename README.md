@@ -152,7 +152,7 @@ Hitr saves input schemas on OpenAPI import. For older imports, keep the original
 
 MCP can use every saved request with an allowed environment. Saved requests can change remote data, and a fixed URL or an allowed environment can point to the same server as a disallowed environment. Keep MCP enabled only if you want local clients to have that access while Hitr is unlocked.
 
-Hitr uses the saved method, destination, headers, and auth, and applies typed filter values for the current call only. It attaches credentials in the desktop process, checks the selected environment’s `baseUrl` origin when configured, and uses HTTPS with redirects disabled. Results include HTTP status, latency, and up to 128 KiB of response data. `body_omitted_reason` reports `size_limit`, `invalid_utf8`, or `credential_match`. An API response can still contain sensitive data.
+Hitr uses the saved method, destination, headers, and auth, and applies typed filter values for the current call only. It attaches credentials in the desktop process, checks the selected environment’s `baseUrl` origin when configured, and uses HTTPS, following up to five redirects within the original origin. Redirects to another origin or to HTTP are not followed. Results include HTTP status, latency, and up to 128 KiB of response data. `body_omitted_reason` reports `size_limit`, `invalid_utf8`, or `credential_match`. An API response can still contain sensitive data.
 
 MCP uses a private local socket and the [stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports). The socket limits access to the local user account.
 
