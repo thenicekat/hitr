@@ -719,9 +719,7 @@ fn save_notes_preferences(
     file.write_all(&serde_json::to_vec(&preferences).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     if let Some(notes) = window.app_handle().get_webview_window("notes") {
-        notes
-            .set_always_on_top(preferences.always_on_top)
-            .map_err(|e| e.to_string())?;
+        set_notes_always_on_top(&notes, preferences.always_on_top)?;
     }
     file.persist(path).map_err(|e| e.to_string())?;
     window
@@ -812,11 +810,30 @@ fn workspace_window(app: &AppHandle, label: &str) -> Result<tauri::WebviewWindow
     }
 }
 
+fn set_notes_always_on_top(notes: &tauri::WebviewWindow, enabled: bool) -> Result<(), String> {
+    notes
+        .set_always_on_top(enabled)
+        .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    if enabled {
+        let window = notes.clone();
+        notes
+            .run_on_main_thread(move || {
+                use objc2_app_kit::{NSStatusWindowLevel, NSWindow};
+                if let Ok(handle) = window.ns_window() {
+                    // A floating window can sit below another app's fullscreen window.
+                    let native = unsafe { &*(handle as *const NSWindow) };
+                    native.setLevel(NSStatusWindowLevel);
+                }
+            })
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 fn configure_notes_window(notes: &tauri::WebviewWindow) -> Result<(), String> {
     let preferences = load_notes_preferences().unwrap_or_default();
-    notes
-        .set_always_on_top(preferences.always_on_top)
-        .map_err(|e| e.to_string())?;
+    set_notes_always_on_top(notes, preferences.always_on_top)?;
     #[cfg(target_os = "macos")]
     {
         let window = notes.clone();
