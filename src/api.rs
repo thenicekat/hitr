@@ -118,6 +118,14 @@ pub async fn set_mcp_enabled(enabled: bool) -> Result<(), String> {
     call_unit("set_mcp_enabled", Args { enabled }).await
 }
 
+pub async fn set_mcp_allowed_envs(names: Vec<String>) -> Result<(), String> {
+    #[derive(Serialize)]
+    struct Args {
+        names: Vec<String>,
+    }
+    call_unit("set_mcp_allowed_envs", Args { names }).await
+}
+
 pub async fn vault_unlock(password: &str) -> Result<(), String> {
     call_unit("vault_unlock", UnlockArgs { password }).await
 }

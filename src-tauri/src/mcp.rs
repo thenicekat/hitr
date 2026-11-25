@@ -30,6 +30,7 @@ pub(super) enum Status {
 
 pub(super) struct Access {
     enabled: Mutex<bool>,
+    allowed_envs: Mutex<Result<Vec<String>, String>>,
     revoked: watch::Sender<()>,
 }
 
@@ -37,12 +38,42 @@ impl Access {
     fn new(enabled: bool) -> Self {
         Self {
             enabled: Mutex::new(enabled),
+            allowed_envs: Mutex::new(Ok(Vec::new())),
             revoked: watch::channel(()).0,
         }
     }
 
     pub(super) fn load() -> Self {
-        Self::new(enabled_path().is_ok_and(|path| path.is_file()))
+        let access = Self::new(enabled_path().is_ok_and(|path| path.is_file()));
+        *access.allowed_envs.lock().unwrap() = (|| -> io::Result<Vec<String>> {
+            let path = allowed_envs_path()?;
+            match std::fs::read(path) {
+                Ok(data) => serde_json::from_slice(&data).map_err(io::Error::other),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+                Err(e) => Err(e),
+            }
+        })()
+        .map_err(|e| e.to_string());
+        access
+    }
+
+    pub(super) fn allowed_envs(&self) -> Result<Vec<String>, String> {
+        self.allowed_envs.lock().unwrap().clone()
+    }
+
+    pub(super) fn set_allowed_envs(&self, names: Vec<String>) -> io::Result<()> {
+        let mut current = self.allowed_envs.lock().unwrap();
+        let path = allowed_envs_path()?;
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let temp = path.with_extension("tmp");
+        let data = serde_json::to_vec(&names).map_err(io::Error::other)?;
+        std::fs::write(&temp, data)?;
+        std::fs::rename(temp, path)?;
+        *current = Ok(names);
+        self.revoke();
+        Ok(())
     }
 
     pub(super) fn enabled(&self) -> bool {
@@ -109,9 +140,7 @@ struct Search {
 struct SendRequest {
     #[schemars(description = "Exact request ID from search_requests.")]
     request_id: String,
-    #[schemars(
-        description = "Exact environment name from search_requests, or null to send without an environment."
-    )]
+    #[schemars(description = "Exact allowed environment name from search_requests.")]
     environment: Option<String>,
     #[serde(default)]
     #[schemars(
@@ -157,6 +186,10 @@ impl Broker {
 
     fn search(&self, input: Search) -> Result<Value, &'static str> {
         self.check_access()?;
+        let allowed = self
+            .access
+            .allowed_envs()
+            .map_err(|_| "MCP environment restrictions could not be loaded.")?;
         let collection = self.collection.lock().unwrap();
         let collection = collection.as_ref().ok_or(NO_COLLECTION)?;
         let query = input.query.to_lowercase();
@@ -183,7 +216,12 @@ impl Broker {
             })
             .collect();
         let next_offset = found.next().map(|_| input.offset + requests.len());
-        let environments: Vec<_> = collection.envs.iter().map(|env| &env.name).collect();
+        let environments: Vec<_> = collection
+            .envs
+            .iter()
+            .filter(|env| !env.path.is_empty() && allowed.contains(&env.path))
+            .map(|env| &env.name)
+            .collect();
         Ok(json!({
             "requests": requests,
             "environments": environments,
@@ -196,6 +234,10 @@ impl Broker {
         &self,
         input: &SendRequest,
     ) -> Result<(model::Request, Option<model::Env>), &'static str> {
+        let allowed = self
+            .access
+            .allowed_envs()
+            .map_err(|_| "MCP environment restrictions could not be loaded.")?;
         let collection = self.collection.lock().unwrap();
         let collection = collection.as_ref().ok_or(NO_COLLECTION)?;
         let req = collection
@@ -209,9 +251,12 @@ impl Broker {
                 .next()
                 .filter(|_| matches.next().is_none())
                 .ok_or("Environment is unknown or ambiguous. Use search_requests.")?;
+            if env.path.is_empty() || !allowed.contains(&env.path) {
+                return Err("Environment is unavailable.");
+            }
             Some(env.clone())
         } else {
-            None
+            return Err("Choose an allowed environment.");
         };
         Ok((req.clone(), env))
     }
@@ -363,6 +408,10 @@ fn enabled_path() -> io::Result<PathBuf> {
     bridge_dir().map(|dir| dir.with_file_name("mcp-enabled"))
 }
 
+fn allowed_envs_path() -> io::Result<PathBuf> {
+    bridge_dir().map(|dir| dir.with_file_name("mcp-allowed-environments.json"))
+}
+
 fn listen(dir: &Path) -> io::Result<(File, UnixListener)> {
     match std::fs::DirBuilder::new().mode(0o700).create(dir) {
         Ok(()) => {}
@@ -505,6 +554,7 @@ mod tests {
             }],
             envs: vec![model::Env {
                 name: "sandbox".into(),
+                path: "/test/environments/sandbox.yml".into(),
                 variables: vec![
                     model::EnvVar {
                         name: "baseUrl".into(),
@@ -524,13 +574,43 @@ mod tests {
         let vault = Arc::new(VaultState::default());
         *vault.password.lock().unwrap() =
             Some(age::secrecy::SecretString::from("fixture".to_owned()));
+        let access = Access::new(true);
+        *access.allowed_envs.lock().unwrap() = Ok(vec!["/test/environments/sandbox.yml".into()]);
         Broker {
-            access: Arc::new(Access::new(true)),
+            access: Arc::new(access),
             vault,
             collection: Arc::new(Mutex::new(Some(collection))),
             client: reqwest::Client::new(),
             requests: Arc::new(Semaphore::new(1)),
         }
+    }
+
+    #[tokio::test]
+    async fn mcp_requires_an_explicitly_allowed_environment() {
+        let broker = fixture();
+        *broker.access.allowed_envs.lock().unwrap() = Ok(vec![]);
+        let search = || Search {
+            query: String::new(),
+            offset: 0,
+        };
+        assert_eq!(broker.search(search()).unwrap()["environments"], json!([]));
+        let input = |environment| SendRequest {
+            request_id: "widgets/list.yml".into(),
+            environment,
+            inputs: Default::default(),
+        };
+        assert!(broker.send(input(Some("sandbox".into()))).await.is_err());
+        assert!(broker.send(input(None)).await.is_err());
+        *broker.access.allowed_envs.lock().unwrap() =
+            Ok(vec!["/test/environments/sandbox.yml".into()]);
+        assert_eq!(
+            broker.search(search()).unwrap()["environments"],
+            json!(["sandbox"])
+        );
+        assert!(broker.selection(&input(Some("sandbox".into()))).is_ok());
+        *broker.access.allowed_envs.lock().unwrap() = Err("bad settings".into());
+        assert!(broker.search(search()).is_err());
+        assert!(broker.send(input(Some("sandbox".into()))).await.is_err());
     }
 
     #[tokio::test]
@@ -638,10 +718,13 @@ mod tests {
             let mut collection = broker.collection.lock().unwrap();
             collection.as_mut().unwrap().requests[0].http.url =
                 format!("https://{}/widgets", listener.local_addr().unwrap());
+            collection.as_mut().unwrap().envs[0].variables[0].value =
+                format!("https://{}", listener.local_addr().unwrap());
+            collection.as_mut().unwrap().envs[0].variables.truncate(1);
         }
         let mut send = Box::pin(broker.send(SendRequest {
             request_id: "widgets/list.yml".into(),
-            environment: None,
+            environment: Some("sandbox".into()),
             inputs: mcp_inputs::Inputs::default(),
         }));
         // Hold the connection before completing TLS so access can be revoked

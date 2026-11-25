@@ -777,7 +777,7 @@ pub fn App() -> Element {
             }
 
             if *mcp_help_open.read() {
-                McpHelpPanel { on_close: close_mcp_help, vault_locked: *vault_locked.read() }
+                McpHelpPanel { on_close: close_mcp_help, vault_locked: *vault_locked.read(), envs: collection.read().envs.clone() }
             }
 
             if let Some(msg) = toast.read().as_ref() {
