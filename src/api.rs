@@ -118,18 +118,6 @@ pub async fn set_mcp_enabled(enabled: bool) -> Result<(), String> {
     call_unit("set_mcp_enabled", Args { enabled }).await
 }
 
-pub async fn check_update() -> Result<Option<String>, String> {
-    call("check_update", Empty {}).await
-}
-
-pub async fn install_update(version: &str) -> Result<(), String> {
-    #[derive(Serialize)]
-    struct Args<'a> {
-        version: &'a str,
-    }
-    call_unit("install_update", Args { version }).await
-}
-
 pub async fn vault_unlock(password: &str) -> Result<(), String> {
     call_unit("vault_unlock", UnlockArgs { password }).await
 }

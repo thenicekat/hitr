@@ -11,7 +11,6 @@ mod mcp_help;
 mod notes;
 mod onboarding;
 mod types;
-mod update_notice;
 
 use app::App;
 use dioxus::prelude::*;

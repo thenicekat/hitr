@@ -922,9 +922,33 @@ pub fn run() {
                 configure_notes_window(&notes)?;
             }
             #[cfg(target_os = "macos")]
-            app.handle()
-                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            {
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
+                let menu = tauri::menu::Menu::default(app.handle())?;
+                let items = menu.items()?;
+                let app_menu = items
+                    .first()
+                    .and_then(|item| item.as_submenu())
+                    .ok_or("macOS application menu not found")?;
+                let check = tauri::menu::MenuItem::with_id(
+                    app,
+                    "check-for-updates",
+                    "Check for Updates…",
+                    true,
+                    None::<&str>,
+                )?;
+                app_menu.insert(&check, 1)?;
+                app.set_menu(menu)?;
+                app.on_menu_event(|app, event| {
+                    if event.id().as_ref() == "check-for-updates" {
+                        updates::check_from_menu(app.clone());
+                    }
+                });
+            }
             app.manage(updates::Installer::default());
+            #[cfg(target_os = "macos")]
+            updates::start_automatic_checks(app.handle().clone());
             app.manage(AppState {
                 root: Mutex::new(root.clone()),
                 collection: Arc::new(Mutex::new(None)),

@@ -115,7 +115,7 @@ If macOS still refuses ("hitr is damaged"), the download attribute wasn't cleare
 
 ### App updates
 
-Hitr checks for new releases at launch. When an update is available, choose **Update and restart** to download the package, verify its signature, and install it. Older builds without the updater need a one-time manual install from GitHub Releases.
+Hitr checks for new releases at launch and every 24 hours while running. You can also choose **Check for Updates** from the Hitr menu. When an update is available, choose **Update and restart** to download the package, verify its signature, and install it. Older builds without the updater need a one-time manual install from GitHub Releases.
 
 Release builds publish signed update archives and a `latest.json` manifest alongside the DMGs. The release workflow needs the repository’s `TAURI_SIGNING_PRIVATE_KEY` secret. Keep a secure backup of the matching private key outside the repository.
 

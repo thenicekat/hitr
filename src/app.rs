@@ -40,7 +40,7 @@
 #![allow(non_snake_case)]
 
 use crate::types::*;
-use crate::{api, mcp_help::McpHelpPanel, update_notice::UpdateNotice};
+use crate::{api, mcp_help::McpHelpPanel};
 use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
@@ -535,8 +535,6 @@ pub fn App() -> Element {
                     "↻"
                 }
             }
-
-            UpdateNotice {}
 
             div { class: "main",
                 // envs pane

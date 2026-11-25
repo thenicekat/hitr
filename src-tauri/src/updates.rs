@@ -36,6 +36,84 @@ async fn find_update(app: &AppHandle) -> Result<Option<tauri_plugin_updater::Upd
         .map_err(|error| error.to_string())
 }
 
+#[cfg(target_os = "macos")]
+pub fn check_from_menu(app: AppHandle) {
+    check_in_background(app, true);
+}
+
+#[cfg(target_os = "macos")]
+pub fn start_automatic_checks(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            check_in_background(app.clone(), false);
+            tokio::time::sleep(std::time::Duration::from_secs(24 * 60 * 60)).await;
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn check_in_background(app: AppHandle, manual: bool) {
+    use tauri::Manager;
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+
+    tauri::async_runtime::spawn(async move {
+        if !is_installable_bundle() {
+            if manual {
+                app.dialog()
+                    .message("Update checks are available in an installed Hitr app.")
+                    .title("Check for Updates")
+                    .show(|_| {});
+            }
+            return;
+        }
+        match find_update(&app).await {
+            Ok(Some(update)) => {
+                let version = update.version;
+                let callback_app = app.clone();
+                app.dialog()
+                    .message(format!(
+                        "Hitr {version} is available. Update and restart now?"
+                    ))
+                    .title("Update Available")
+                    .buttons(MessageDialogButtons::OkCancelCustom(
+                        "Update and Restart".into(),
+                        "Later".into(),
+                    ))
+                    .show(move |install| {
+                        if install {
+                            tauri::async_runtime::spawn(async move {
+                                if let Err(error) = install_update(
+                                    callback_app.clone(),
+                                    callback_app.state::<Installer>(),
+                                    version,
+                                )
+                                .await
+                                {
+                                    callback_app
+                                        .dialog()
+                                        .message(format!("Update failed: {error}"))
+                                        .title("Update Failed")
+                                        .show(|_| {});
+                                }
+                            });
+                        }
+                    });
+            }
+            Ok(None) if manual => app
+                .dialog()
+                .message("Hitr is up to date.")
+                .title("Check for Updates")
+                .show(|_| {}),
+            Err(error) if manual => app
+                .dialog()
+                .message(format!("Could not check for updates: {error}"))
+                .title("Update Check Failed")
+                .show(|_| {}),
+            _ => {}
+        }
+    });
+}
+
 #[tauri::command]
 pub async fn install_update(
     app: AppHandle,
