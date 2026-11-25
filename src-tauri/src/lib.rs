@@ -22,6 +22,8 @@ mod loader;
 pub mod mcp;
 mod mcp_inputs;
 mod model;
+#[cfg(target_os = "macos")]
+mod notes_panel;
 mod notes_store;
 mod openapi;
 mod updates;
@@ -811,19 +813,26 @@ fn workspace_window(app: &AppHandle, label: &str) -> Result<tauri::WebviewWindow
 }
 
 fn set_notes_always_on_top(notes: &tauri::WebviewWindow, enabled: bool) -> Result<(), String> {
+    // Tao schedules its own level change asynchronously on macOS. Using both
+    // setters can overwrite the panel's status level with the floating level.
+    #[cfg(not(target_os = "macos"))]
     notes
         .set_always_on_top(enabled)
         .map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
-    if enabled {
+    {
         let window = notes.clone();
         notes
             .run_on_main_thread(move || {
-                use objc2_app_kit::{NSStatusWindowLevel, NSWindow};
+                use objc2_app_kit::{NSNormalWindowLevel, NSStatusWindowLevel, NSWindow};
                 if let Ok(handle) = window.ns_window() {
-                    // A floating window can sit below another app's fullscreen window.
+                    // The panel stays a utility window; this preference controls its level.
                     let native = unsafe { &*(handle as *const NSWindow) };
-                    native.setLevel(NSStatusWindowLevel);
+                    native.setLevel(if enabled {
+                        NSStatusWindowLevel
+                    } else {
+                        NSNormalWindowLevel
+                    });
                 }
             })
             .map_err(|e| e.to_string())?;
@@ -832,26 +841,10 @@ fn set_notes_always_on_top(notes: &tauri::WebviewWindow, enabled: bool) -> Resul
 }
 
 fn configure_notes_window(notes: &tauri::WebviewWindow) -> Result<(), String> {
-    let preferences = load_notes_preferences().unwrap_or_default();
-    set_notes_always_on_top(notes, preferences.always_on_top)?;
     #[cfg(target_os = "macos")]
-    {
-        let window = notes.clone();
-        notes
-            .run_on_main_thread(move || {
-                use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
-                if let Ok(handle) = window.ns_window() {
-                    // Tauri owns this NSWindow; AppKit access stays on its main thread.
-                    let native = unsafe { &*(handle as *const NSWindow) };
-                    native.setCollectionBehavior(
-                        native.collectionBehavior()
-                            | NSWindowCollectionBehavior::FullScreenAuxiliary,
-                    );
-                }
-            })
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    notes_panel::configure(notes)?;
+    let preferences = load_notes_preferences().unwrap_or_default();
+    set_notes_always_on_top(notes, preferences.always_on_top)
 }
 
 #[tauri::command]
@@ -918,8 +911,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
+            #[cfg(target_os = "macos")]
+            app.handle().plugin(tauri_nspanel::init())?;
             if let Some(notes) = app.get_webview_window("notes") {
                 configure_notes_window(&notes)?;
+                notes.show()?;
             }
             #[cfg(target_os = "macos")]
             {

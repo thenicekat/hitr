@@ -24,6 +24,8 @@
       {
         "label": "notes",
         "title": "Hitr notes",
+        "visible": false,
+        "focus": false,
         "url": "index.html?notes=1",
         "width": 76,
         "height": 76,
