@@ -25,6 +25,7 @@ mod model;
 #[cfg(target_os = "macos")]
 mod notes_panel;
 mod notes_store;
+mod notes_window;
 mod openapi;
 mod updates;
 mod vault;
@@ -786,9 +787,7 @@ fn move_notes(window: tauri::WebviewWindow, x: i32, y: i32) -> Result<(), String
     if window.label() != "notes" {
         return Err("Invalid window".into());
     }
-    window
-        .set_position(tauri::PhysicalPosition::new(x, y))
-        .map_err(|e| e.to_string())
+    notes_window::move_icon(&window, x, y)
 }
 
 fn workspace_window(app: &AppHandle, label: &str) -> Result<tauri::WebviewWindow, String> {
@@ -802,12 +801,16 @@ fn workspace_window(app: &AppHandle, label: &str) -> Result<tauri::WebviewWindow
                 .iter()
                 .find(|window| window.label == label)
                 .ok_or("Window configuration not found")?;
-            tauri::WebviewWindowBuilder::from_config(app, config)
+            let window = tauri::WebviewWindowBuilder::from_config(app, config)
                 .map_err(|e| e.to_string())?
                 .visible(false)
                 .focused(false)
                 .build()
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string())?;
+            if label == "notes" {
+                notes_window::reset(app);
+            }
+            Ok(window)
         }
     }
 }
@@ -875,32 +878,7 @@ fn resize_notes(window: tauri::WebviewWindow, expanded: bool) -> Result<(), Stri
     if window.label() != "notes" {
         return Err("Only the notes window can be resized".into());
     }
-    let (width, height) = if expanded {
-        (380.0, 520.0)
-    } else {
-        (76.0, 76.0)
-    };
-    // Keep the expanded panel inside the current display's usable area.
-    if expanded {
-        if let Some(monitor) = window.current_monitor().map_err(|e| e.to_string())? {
-            let area = monitor.work_area();
-            let pos = window.outer_position().map_err(|e| e.to_string())?;
-            let scale = monitor.scale_factor();
-            let max_x = (area.position.x as i64 + area.size.width as i64 - (width * scale) as i64)
-                .max(area.position.x as i64);
-            let max_y = (area.position.y as i64 + area.size.height as i64
-                - (height * scale) as i64)
-                .max(area.position.y as i64);
-            let x = (pos.x as i64).clamp(area.position.x as i64, max_x) as i32;
-            let y = (pos.y as i64).clamp(area.position.y as i64, max_y) as i32;
-            window
-                .set_position(tauri::PhysicalPosition::new(x, y))
-                .map_err(|e| e.to_string())?;
-        }
-    }
-    window
-        .set_size(tauri::LogicalSize::new(width, height))
-        .map_err(|e| e.to_string())
+    notes_window::resize(&window, expanded)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -908,6 +886,7 @@ pub fn run() {
     let root = read_root_from_config().unwrap_or_else(default_root);
 
     tauri::Builder::default()
+        .manage(notes_window::NotesPlacement::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
