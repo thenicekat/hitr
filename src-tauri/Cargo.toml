@@ -49,5 +49,6 @@ panic = "abort"
 strip = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
+tauri-nspanel = "2.1"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWindow"] }
 tauri-plugin-updater = "2"
