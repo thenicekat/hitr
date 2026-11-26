@@ -83,6 +83,8 @@ footer { display: flex; align-items: center; justify-content: space-between; fle
 .note-editor .line-check { position: absolute; top: .32em; left: 0; display: grid; place-items: center; width: 16px; height: 16px; padding: 0; border: 1px solid var(--fg-mute); border-radius: 4px; background: transparent; color: var(--ok); font: 12px -apple-system, BlinkMacSystemFont, sans-serif; user-select: none; }
 .note-editor .line-check:hover { border-color: var(--ok); background: var(--bg2); }
 .note-editor [data-done="true"] { color: var(--fg-mute); text-decoration: line-through; }
+.note-editor.hide-completed [data-task-id][data-done="true"] { display: none; }
+.format-toolbar button[data-action="collapse-done"][aria-pressed="true"] { background: var(--bg3); color: var(--fg); }
 .note-editor [data-done="true"] .line-check { border-color: var(--ok); text-decoration: none; }
 .note-editor .line-remind { display: inline-block; margin: 0 0 0 8px; padding: 2px 3px; border: 0; border-radius: 4px; background: transparent; color: var(--fg-mute); font: 11px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; font-variant-numeric: tabular-nums; white-space: nowrap; vertical-align: baseline; text-decoration: none; user-select: none; }
 .note-editor .line-remind[hidden] { display: none; }

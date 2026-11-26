@@ -258,6 +258,13 @@ toolbar.addEventListener('mousedown', event => { if (event.target.closest('butto
 toolbar.addEventListener('click', event => {
   const button = event.target.closest('button');
   if (!button) return;
+  if (button.dataset.action === 'collapse-done') {
+    const collapsed = root.classList.toggle('hide-completed');
+    button.setAttribute('aria-pressed', String(collapsed));
+    button.setAttribute('aria-label', collapsed ? 'Show completed tasks' : 'Hide completed tasks');
+    button.title = collapsed ? 'Show completed tasks' : 'Hide completed tasks';
+    return;
+  }
   if (button.dataset.action === 'task') { toggleTask(); return; }
   if (button.dataset.action === 'remind') { openReminder(ensureLine()); return; }
   if (!button.dataset.command) return;
