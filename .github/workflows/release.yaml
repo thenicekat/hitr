@@ -6,7 +6,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # Match the Dioxus framework version in Cargo.lock and update both checksums together.
+  # Match the Dioxus framework version in Cargo.lock and update the checksum too.
   DX_VERSION: "0.7.9"
 
 permissions:
@@ -21,9 +21,6 @@ jobs:
           - target: aarch64-apple-darwin
             runner: macos-15
             dx_sha256: "970c72255aa8f1fb4f56e4e0c1e702de35adee69b0df663182ae1400bca43590"
-          - target: x86_64-apple-darwin
-            runner: macos-15-intel
-            dx_sha256: "7803824bfbf5babf94f5a3b898f6b6ba5a507e43b906482d1e729e78e40d753b"
 
     runs-on: ${{ matrix.runner }}
 
@@ -83,13 +80,12 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Verify the updater manifest for both Mac architectures
+      - name: Verify the Apple Silicon updater manifest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern latest.json
           jq -e --arg version "${GITHUB_REF_NAME#v}" '
             .version == $version and
-            (.platforms["darwin-aarch64"] | .signature != "" and .signature != null and (.url | endswith(".app.tar.gz"))) and
-            (.platforms["darwin-x86_64"] | .signature != "" and .signature != null and (.url | endswith(".app.tar.gz")))
+            (.platforms["darwin-aarch64"] | .signature != "" and .signature != null and (.url | endswith(".app.tar.gz")))
           ' latest.json
