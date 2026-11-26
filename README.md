@@ -146,7 +146,7 @@ Point hitr at your collection root: click `root: /...` in the topbar, paste a pa
 | `search_requests` | Finds saved requests by name, ID, or method and returns each request's `input_schema` and the available environments. Send an empty query to browse. Pass back `next_offset` as `offset` to get another page. |
 | `send_request` | Runs a saved request by its exact ID with an allowed environment and optional `inputs`. |
 
-Use the schema's `query` and `body` objects to set filters for one call. For example, a saved list request might accept `"inputs": { "query": { "state": ["active", "pending"], "limit": 10 } }`. Available inputs are OpenAPI query parameters and top-level JSON fields with scalar or scalar-array types. Hitr keeps saved values for fields you leave alone and omits optional empty query parameters unless the spec permits empty values.
+Use the schema's `query` and `body` objects to set filters for one call. For example, a saved list request might accept `"inputs": { "query": { "state": ["active", "pending"], "limit": 10 } }`. Available inputs are OpenAPI query parameters and typed JSON body fields, including nested objects and arrays of objects. Unknown and protected fields are rejected at every level. Hitr keeps saved values for fields you leave alone and omits optional empty query parameters unless the spec permits empty values. Saved nested objects and environment-bound values remain under desktop control.
 
 Hitr saves input schemas on OpenAPI import. For older imports, keep the original spec as `openapi.yaml` or `spec.yaml` at the collection root (`.yml` and `.json` also work) and reload the collection. Hitr matches the saved method and URL to the spec.
 
