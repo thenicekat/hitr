@@ -680,6 +680,13 @@ fn NoteEditor(
                 "☐"
             }
             button {
+                "data-action": "collapse-done",
+                title: "Hide completed tasks",
+                aria_label: "Hide completed tasks",
+                aria_pressed: "false",
+                "✓"
+            }
+            button {
                 "data-action": "remind",
                 title: "Remind me about this line",
                 aria_label: "Remind me about this line",
