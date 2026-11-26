@@ -1,6 +1,6 @@
 [package]
 name = "hitr"
-version = "0.2.5"
+version = "0.2.7"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -40,6 +40,11 @@ openapiv3 = "2"
 rmcp = { version = "3.11", default-features = false, features = ["server", "macros", "transport-async-rw"] }
 
 
+[dev-dependencies]
+rcgen = { version = "0.14", default-features = false, features = ["ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+
+
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
 codegen-units = 1
@@ -49,5 +54,6 @@ panic = "abort"
 strip = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
+tauri-nspanel = "2.1"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWindow"] }
 tauri-plugin-updater = "2"

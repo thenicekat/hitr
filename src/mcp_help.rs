@@ -3,7 +3,7 @@ use dioxus::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 #[component]
-pub fn McpHelpPanel(on_close: EventHandler<()>, vault_locked: bool) -> Element {
+pub fn McpHelpPanel(on_close: EventHandler<()>, vault_locked: bool, envs: Vec<Env>) -> Element {
     let mut status = use_signal(|| None::<Result<McpHelp, String>>);
     let mut config_open = use_signal(|| false);
     let mut copy_result = use_signal(|| None::<bool>);
@@ -105,7 +105,50 @@ pub fn McpHelpPanel(on_close: EventHandler<()>, vault_locked: bool) -> Element {
                     p { role: "alert", class: "mcp-error", "{error}" }
                 }
                 if enabled.is_some() {
-                    p { id: "mcp-access-scope", class: "mcp-hint", "While the vault is unlocked, local clients can use saved requests in all environments, including production." }
+                    p { id: "mcp-access-scope", class: "mcp-hint", "While the vault is unlocked, local clients can send saved requests in environments you allow below." }
+                    if let Some(help) = help {
+                        if let Some(error) = &help.allowed_envs_error {
+                            p { role: "alert", class: "mcp-error", "MCP requests are blocked because restrictions could not be loaded: {error}" }
+                        }
+                        fieldset { class: "mcp-environments",
+                            disabled: *saving.read() || help.allowed_envs_error.is_some(),
+                            legend { "Allowed environments" }
+                            p { class: "mcp-hint", "Choose which environments MCP clients can discover and use. None are allowed by default." }
+                            if envs.is_empty() {
+                                p { class: "mcp-hint", "Load a collection to choose environments." }
+                            }
+                            for env in envs.iter() {
+                                {
+                                    let name = env.name.clone();
+                                    let path = env.path.clone();
+                                    let allowed = help.allowed_envs.contains(&path);
+                                    let mut names = help.allowed_envs.clone();
+                                    rsx! {
+                                        label { key: "{path}", class: "mcp-environment",
+                                            input {
+                                                r#type: "checkbox",
+                                                checked: allowed,
+                                                onchange: move |event| {
+                                                    names.retain(|item| item != &path);
+                                                    if event.checked() { names.push(path.clone()); }
+                                                    let updated = names.clone();
+                                                    saving.set(true);
+                                                    settings_error.set(None);
+                                                    spawn(async move {
+                                                        if let Err(error) = api::set_mcp_allowed_envs(updated).await { settings_error.set(Some(error)); }
+                                                        status.set(Some(api::mcp_help().await));
+                                                        saving.set(false);
+                                                    });
+                                                }
+                                            }
+                                            "{name}"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        p { class: "mcp-hint", "Choices apply to this collection. An allowed environment or a fixed URL may still point to another server." }
+                    }
                 }
             }
             if let Some(config) = help.and_then(|help| help.client_config.as_ref()) {

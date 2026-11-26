@@ -22,7 +22,10 @@ mod loader;
 pub mod mcp;
 mod mcp_inputs;
 mod model;
+#[cfg(target_os = "macos")]
+mod notes_panel;
 mod notes_store;
+mod notes_window;
 mod openapi;
 mod updates;
 mod vault;
@@ -157,6 +160,8 @@ fn mcp_help(state: State<'_, AppState>) -> serde_json::Value {
         serde_json::json!({
             "status": status,
             "enabled": enabled,
+            "allowed_envs": state.mcp_access.allowed_envs().unwrap_or_default(),
+            "allowed_envs_error": state.mcp_access.allowed_envs().err(),
             "client_config": client_config
         })
     }
@@ -164,6 +169,22 @@ fn mcp_help(state: State<'_, AppState>) -> serde_json::Value {
     {
         let _ = state;
         serde_json::json!({"status": {"state": "unsupported"}, "enabled": false})
+    }
+}
+
+#[tauri::command]
+fn set_mcp_allowed_envs(state: State<'_, AppState>, names: Vec<String>) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        state
+            .mcp_access
+            .set_allowed_envs(names)
+            .map_err(|e| format!("Could not save MCP restrictions: {e}"))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (state, names);
+        Err("MCP is unavailable on this platform.".into())
     }
 }
 
@@ -784,9 +805,7 @@ fn move_notes(window: tauri::WebviewWindow, x: i32, y: i32) -> Result<(), String
     if window.label() != "notes" {
         return Err("Invalid window".into());
     }
-    window
-        .set_position(tauri::PhysicalPosition::new(x, y))
-        .map_err(|e| e.to_string())
+    notes_window::move_icon(&window, x, y)
 }
 
 fn workspace_window(app: &AppHandle, label: &str) -> Result<tauri::WebviewWindow, String> {
@@ -800,30 +819,41 @@ fn workspace_window(app: &AppHandle, label: &str) -> Result<tauri::WebviewWindow
                 .iter()
                 .find(|window| window.label == label)
                 .ok_or("Window configuration not found")?;
-            tauri::WebviewWindowBuilder::from_config(app, config)
+            let window = tauri::WebviewWindowBuilder::from_config(app, config)
                 .map_err(|e| e.to_string())?
                 .visible(false)
                 .focused(false)
                 .build()
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string())?;
+            if label == "notes" {
+                notes_window::reset(app);
+            }
+            Ok(window)
         }
     }
 }
 
 fn set_notes_always_on_top(notes: &tauri::WebviewWindow, enabled: bool) -> Result<(), String> {
+    // Tao schedules its own level change asynchronously on macOS. Using both
+    // setters can overwrite the panel's status level with the floating level.
+    #[cfg(not(target_os = "macos"))]
     notes
         .set_always_on_top(enabled)
         .map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
-    if enabled {
+    {
         let window = notes.clone();
         notes
             .run_on_main_thread(move || {
-                use objc2_app_kit::{NSStatusWindowLevel, NSWindow};
+                use objc2_app_kit::{NSNormalWindowLevel, NSStatusWindowLevel, NSWindow};
                 if let Ok(handle) = window.ns_window() {
-                    // A floating window can sit below another app's fullscreen window.
+                    // The panel stays a utility window; this preference controls its level.
                     let native = unsafe { &*(handle as *const NSWindow) };
-                    native.setLevel(NSStatusWindowLevel);
+                    native.setLevel(if enabled {
+                        NSStatusWindowLevel
+                    } else {
+                        NSNormalWindowLevel
+                    });
                 }
             })
             .map_err(|e| e.to_string())?;
@@ -832,26 +862,10 @@ fn set_notes_always_on_top(notes: &tauri::WebviewWindow, enabled: bool) -> Resul
 }
 
 fn configure_notes_window(notes: &tauri::WebviewWindow) -> Result<(), String> {
-    let preferences = load_notes_preferences().unwrap_or_default();
-    set_notes_always_on_top(notes, preferences.always_on_top)?;
     #[cfg(target_os = "macos")]
-    {
-        let window = notes.clone();
-        notes
-            .run_on_main_thread(move || {
-                use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
-                if let Ok(handle) = window.ns_window() {
-                    // Tauri owns this NSWindow; AppKit access stays on its main thread.
-                    let native = unsafe { &*(handle as *const NSWindow) };
-                    native.setCollectionBehavior(
-                        native.collectionBehavior()
-                            | NSWindowCollectionBehavior::FullScreenAuxiliary,
-                    );
-                }
-            })
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    notes_panel::configure(notes)?;
+    let preferences = load_notes_preferences().unwrap_or_default();
+    set_notes_always_on_top(notes, preferences.always_on_top)
 }
 
 #[tauri::command]
@@ -882,32 +896,7 @@ fn resize_notes(window: tauri::WebviewWindow, expanded: bool) -> Result<(), Stri
     if window.label() != "notes" {
         return Err("Only the notes window can be resized".into());
     }
-    let (width, height) = if expanded {
-        (380.0, 520.0)
-    } else {
-        (76.0, 76.0)
-    };
-    // Keep the expanded panel inside the current display's usable area.
-    if expanded {
-        if let Some(monitor) = window.current_monitor().map_err(|e| e.to_string())? {
-            let area = monitor.work_area();
-            let pos = window.outer_position().map_err(|e| e.to_string())?;
-            let scale = monitor.scale_factor();
-            let max_x = (area.position.x as i64 + area.size.width as i64 - (width * scale) as i64)
-                .max(area.position.x as i64);
-            let max_y = (area.position.y as i64 + area.size.height as i64
-                - (height * scale) as i64)
-                .max(area.position.y as i64);
-            let x = (pos.x as i64).clamp(area.position.x as i64, max_x) as i32;
-            let y = (pos.y as i64).clamp(area.position.y as i64, max_y) as i32;
-            window
-                .set_position(tauri::PhysicalPosition::new(x, y))
-                .map_err(|e| e.to_string())?;
-        }
-    }
-    window
-        .set_size(tauri::LogicalSize::new(width, height))
-        .map_err(|e| e.to_string())
+    notes_window::resize(&window, expanded)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -915,11 +904,15 @@ pub fn run() {
     let root = read_root_from_config().unwrap_or_else(default_root);
 
     tauri::Builder::default()
+        .manage(notes_window::NotesPlacement::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
+            #[cfg(target_os = "macos")]
+            app.handle().plugin(tauri_nspanel::init())?;
             if let Some(notes) = app.get_webview_window("notes") {
                 configure_notes_window(&notes)?;
+                notes.show()?;
             }
             #[cfg(target_os = "macos")]
             {
@@ -986,6 +979,7 @@ pub fn run() {
             vault_status,
             mcp_help,
             set_mcp_enabled,
+            set_mcp_allowed_envs,
             updates::check_update,
             updates::install_update,
             vault_unlock,

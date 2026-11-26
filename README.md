@@ -137,21 +137,22 @@ Point hitr at your collection root: click `root: /...` in the topbar, paste a pa
 ## MCP for agents
 
 1. Open **MCP** in Hitr and turn on **Enable MCP**. The setting is off by default and is remembered across launches. Previous per-request grant files do not enable this setting.
-2. Select the **Copy configuration** icon and add the copied configuration to your MCP client. Set the server command to the installed Hitr executable and pass `mcp` as its argument.
-3. Keep Hitr open and unlock its vault. Both MCP tools pause when the vault locks or MCP is disabled.
+2. Under **Allowed environments**, explicitly select the environments MCP may use. None are allowed by default; selections are saved for each environment file.
+3. Select the **Copy configuration** icon and add the copied configuration to your MCP client. Set the server command to the installed Hitr executable and pass `mcp` as its argument.
+4. Keep Hitr open and unlock its vault. Both MCP tools pause when the vault locks or MCP is disabled.
 
 | Tool | What it does |
 | --- | --- |
 | `search_requests` | Finds saved requests by name, ID, or method and returns each request's `input_schema` and the available environments. Send an empty query to browse. Pass back `next_offset` as `offset` to get another page. |
-| `send_request` | Runs a saved request by its exact ID with the selected environment and optional `inputs`. Pass `null` to run without an environment. |
+| `send_request` | Runs a saved request by its exact ID with an allowed environment and optional `inputs`. |
 
-Use the schema's `query` and `body` objects to set filters for one call. For example, a saved list request might accept `"inputs": { "query": { "state": ["active", "pending"], "limit": 10 } }`. Available inputs are OpenAPI query parameters and top-level JSON fields with scalar or scalar-array types. Hitr keeps saved values for fields you leave alone and omits optional empty query parameters unless the spec permits empty values.
+Use the schema's `query` and `body` objects to set filters for one call. For example, a saved list request might accept `"inputs": { "query": { "state": ["active", "pending"], "limit": 10 } }`. Available inputs are OpenAPI query parameters and typed JSON body fields, including nested objects and arrays of objects. Unknown and protected fields are rejected at every level. Hitr keeps saved values for fields you leave alone and omits optional empty query parameters unless the spec permits empty values. Saved nested objects and environment-bound values remain under desktop control.
 
 Hitr saves input schemas on OpenAPI import. For older imports, keep the original spec as `openapi.yaml` or `spec.yaml` at the collection root (`.yml` and `.json` also work) and reload the collection. Hitr matches the saved method and URL to the spec.
 
-MCP can use every saved request and environment in the open collection, including production. Saved requests can change remote data. Keep MCP enabled only if you want local clients to have that access while Hitr is unlocked.
+MCP can use every saved request with an allowed environment. Saved requests can change remote data, and a fixed URL or an allowed environment can point to the same server as a disallowed environment. Keep MCP enabled only if you want local clients to have that access while Hitr is unlocked.
 
-Hitr uses the saved method, destination, headers, and auth, and applies typed filter values for the current call only. It attaches credentials in the desktop process, checks the selected environment’s `baseUrl` origin when configured, and uses HTTPS with redirects disabled. Results include HTTP status, latency, and up to 128 KiB of response data. `body_omitted_reason` reports `size_limit`, `invalid_utf8`, or `credential_match`. An API response can still contain sensitive data.
+Hitr uses the saved method, destination, headers, and auth, and applies typed filter values for the current call only. It attaches credentials in the desktop process, checks the selected environment’s `baseUrl` origin when configured, and uses HTTPS, following up to five redirects within the original origin. Redirects to another origin or to HTTP are not followed. Results include HTTP status, latency, and up to 128 KiB of response data. `body_omitted_reason` reports `size_limit`, `invalid_utf8`, or `credential_match`. An API response can still contain sensitive data.
 
 MCP uses a private local socket and the [stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports). The socket limits access to the local user account.
 

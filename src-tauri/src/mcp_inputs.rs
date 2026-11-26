@@ -8,6 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InputSchema {
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub version: u8,
     pub method: String,
     pub url: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -16,6 +18,10 @@ pub struct InputSchema {
     pub omit_empty_query: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub body: BTreeMap<String, FieldType>,
+}
+
+fn is_zero(value: &u8) -> bool {
+    *value == 0
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -32,6 +38,8 @@ pub struct FieldType {
     pub scalar: Scalar,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub array: bool,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub properties: BTreeMap<String, FieldType>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -41,6 +49,7 @@ pub enum Scalar {
     Integer,
     Number,
     Boolean,
+    Object,
 }
 
 impl FieldType {
@@ -50,6 +59,13 @@ impl FieldType {
             Scalar::Integer => value.is_i64() || value.is_u64(),
             Scalar::Number => value.is_number(),
             Scalar::Boolean => value.is_boolean(),
+            Scalar::Object => value.as_object().is_some_and(|object| {
+                object.iter().all(|(name, value)| {
+                    self.properties
+                        .get(name)
+                        .is_some_and(|field| field.accepts(value))
+                })
+            }),
         }
     }
 
@@ -64,7 +80,16 @@ impl FieldType {
     }
 
     fn json_schema(&self) -> Value {
-        let item = json!({ "type": self.scalar });
+        let item = if matches!(self.scalar, Scalar::Object) {
+            object_schema(
+                self.properties
+                    .iter()
+                    .map(|(name, field)| (name.clone(), field.json_schema()))
+                    .collect(),
+            )
+        } else {
+            json!({ "type": self.scalar })
+        };
         if self.array {
             json!({ "type": "array", "items": item })
         } else {
@@ -319,6 +344,23 @@ components:
     Labels:
       type: array
       items: {type: string}
+    Caveat:
+      type: object
+      properties:
+        key: {$ref: '#/components/schemas/Selector'}
+        operator: {type: string}
+        value: {$ref: '#/components/schemas/CaveatValue'}
+    Selector:
+      type: object
+      properties:
+        object: {type: string}
+        attribute: {type: string}
+    CaveatValue:
+      type: object
+      properties:
+        string_value: {type: string}
+        password: {type: string}
+        region: {type: string}
 paths:
   /widgets:
     get:
@@ -340,6 +382,13 @@ paths:
                 limit: {type: integer}
                 workspace: {type: string}
                 password: {type: string}
+                preferences:
+                  type: object
+                  properties:
+                    region: {type: string}
+                caveats:
+                  type: array
+                  items: {$ref: '#/components/schemas/Caveat'}
       responses: {'200': {description: OK}}
 "#,
         )
@@ -361,7 +410,7 @@ http:
   url: '{{baseUrl}}/widgets'
   body:
     type: json
-    data: '{"workspace":"{{region}}","limit":50}'
+    data: '{"workspace":"{{region}}","limit":50,"preferences":{"region":"{{region}}"}}'
 "#;
         std::fs::write(root.join("get.yml"), get).unwrap();
         std::fs::write(root.join("post.yml"), post).unwrap();
@@ -379,7 +428,12 @@ http:
         let body = &schema["properties"]["body"]["properties"];
         assert!(body.get("workspace").is_none());
         assert!(body.get("password").is_none());
+        assert!(body.get("preferences").is_none());
         assert_eq!(body["labels"]["type"], "array");
+        let caveat = &body["caveats"]["items"]["properties"];
+        assert_eq!(caveat["key"]["properties"]["attribute"]["type"], "string");
+        assert!(caveat["value"]["properties"].get("password").is_none());
+        assert!(caveat["value"]["properties"].get("region").is_none());
 
         let client = reqwest::Client::new();
         let env = model::Env {
@@ -423,18 +477,32 @@ http:
             post_req.clone(),
             Some(&env),
             None,
-            inputs(json!({"body":{"labels":["{{region}}"],"limit":10}})),
+            inputs(json!({"body":{"labels":["{{region}}"],"limit":10, "caveats":[{"key":{"object":"target","attribute":"resource_name"},"operator":"eq","value":{"string_value":"quarterly_report"}}]}})),
         )
         .unwrap();
         let bytes = post_http.body().unwrap().as_bytes().unwrap();
         assert_eq!(
             serde_json::from_slice::<Value>(bytes).unwrap(),
-            json!({"labels":["{{region}}"], "limit":10, "workspace":"fixture-value"})
+            json!({"labels":["{{region}}"], "limit":10, "workspace":"fixture-value", "preferences":{"region":"fixture-value"}, "caveats":[{"key":{"object":"target","attribute":"resource_name"},"operator":"eq","value":{"string_value":"quarterly_report"}}]})
         );
         for (req, input) in [
             (get_req, json!({"query":{"limit":"10"}})),
             (get_req, json!({"query":{"region":"new"}})),
             (post_req, json!({"body":{"workspace":"new"}})),
+            (post_req, json!({"body":{"preferences":{"region":"new"}}})),
+            (
+                post_req,
+                json!({"body":{"caveats":[{"value":{"password":"secret"}}]}}),
+            ),
+            (
+                post_req,
+                json!({"body":{"caveats":[{"value":{"region":"new"}}]}}),
+            ),
+            (
+                post_req,
+                json!({"body":{"caveats":[{"key":"not an object"}]}}),
+            ),
+            (post_req, json!({"body":{"caveats":[{"unknown":true}]}})),
         ] {
             assert!(prepare(&client, req.clone(), Some(&env), None, inputs(input)).is_err());
         }
@@ -446,7 +514,19 @@ http:
 
         let spec = root.join("spec.yaml");
         crate::openapi::import(root, &spec, "imported", false, "", false).unwrap();
+        let mut legacy = post_req.clone();
+        let legacy_schema = legacy.mcp_schema.as_mut().unwrap();
+        legacy_schema.version = 0;
+        legacy_schema.body.remove("caveats");
+        crate::openapi::recover_mcp_schemas(root, std::slice::from_mut(&mut legacy));
+        assert!(describe(&legacy)["properties"]["body"]["properties"]
+            .get("caveats")
+            .is_some());
         std::fs::remove_file(spec).unwrap();
+        let mut legacy_without_spec = post_req.clone();
+        legacy_without_spec.mcp_schema.as_mut().unwrap().version = 0;
+        crate::openapi::recover_mcp_schemas(root, std::slice::from_mut(&mut legacy_without_spec));
+        assert!(legacy_without_spec.mcp_schema.is_some());
         let collection = loader::load_collection(root).unwrap();
         let imported = collection
             .requests

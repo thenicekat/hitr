@@ -492,7 +492,7 @@ pub fn App() -> Element {
                     span { class: "error", "{e}" }
                 }
                 button {
-                    class: "btn ghost theme-toggle", title: "Switch between light and dark appearance", aria_label: "Toggle dark mode", disabled: changing_theme(),
+                    class: "btn icon ghost theme-toggle", title: "Switch between light and dark appearance", aria_label: "Switch between light and dark appearance", disabled: changing_theme(),
                     onclick: move |_| { spawn(async move {
                         changing_theme.set(true);
                         match api::load_notes_preferences().await {
@@ -504,8 +504,8 @@ pub fn App() -> Element {
                         }
                         changing_theme.set(false);
                     }); },
-                    span { class: "theme-to-dark", "Dark" }
-                    span { class: "theme-to-light", "Light" }
+                    span { class: "theme-to-dark", aria_hidden: "true", "☾" }
+                    span { class: "theme-to-light", aria_hidden: "true", "☀︎" }
                 }
                 if !*vault_locked.read() {
                     button {
@@ -575,11 +575,16 @@ pub fn App() -> Element {
                                 let name = env.name.clone();
                                 let selected = selected_env.read().as_deref() == Some(&name);
                                 let n2 = name.clone();
+                                let edit_name = name.clone();
                                 rsx! {
                                     div {
                                         key: "{name}",
                                         class: if selected { "row selected" } else { "row" },
                                         onclick: move |_| selected_env.set(Some(n2.clone())),
+                                        ondoubleclick: move |_| {
+                                            selected_env.set(Some(edit_name.clone()));
+                                            modal.set(Modal::EditEnv);
+                                        },
                                         span { class: "row-title", "{name}" }
                                         span { class: "row-meta", "{env.variables.len()} vars" }
                                     }
@@ -777,7 +782,7 @@ pub fn App() -> Element {
             }
 
             if *mcp_help_open.read() {
-                McpHelpPanel { on_close: close_mcp_help, vault_locked: *vault_locked.read() }
+                McpHelpPanel { on_close: close_mcp_help, vault_locked: *vault_locked.read(), envs: collection.read().envs.clone() }
             }
 
             if let Some(msg) = toast.read().as_ref() {

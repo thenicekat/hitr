@@ -152,6 +152,10 @@ pub struct McpHelp {
     pub status: McpStatus,
     pub enabled: bool,
     pub client_config: Option<String>,
+    #[serde(default)]
+    pub allowed_envs: Vec<String>,
+    #[serde(default)]
+    pub allowed_envs_error: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]

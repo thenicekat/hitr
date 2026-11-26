@@ -658,6 +658,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .mcp-switch:disabled { opacity: .6; cursor: default; }
 .mcp-hint, .mcp-error { margin: 8px 0 0; font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
 .mcp-hint { color: var(--fg-dim); }
+.mcp-environments { margin: 16px 0 0; padding: 12px; border: 1px solid var(--border); border-radius: 6px; }
+.mcp-environments legend { padding: 0 4px; font-weight: 600; }
+.mcp-environments .mcp-hint { margin: 0 0 10px; }
+.mcp-environment { display: flex; align-items: center; gap: 8px; padding: 6px 0; cursor: pointer; overflow-wrap: anywhere; }
+.mcp-environment input { accent-color: var(--accent); }
 .mcp-access > button { margin-top: 8px; }
 .mcp-config { background: var(--bg); border: 1px solid var(--border); border-radius: 5px; }
 .mcp-config-bar { display: flex; align-items: center; gap: 4px; padding: 3px 4px; }
@@ -693,4 +698,4 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .theme-to-light { display: none; }
 :root[data-theme="dark"] .theme-to-dark { display: none; }
 :root[data-theme="dark"] .theme-to-light { display: inline; }
-.theme-toggle { min-width: 48px; }
+.btn.icon.theme-toggle { font-size: 18px; }
