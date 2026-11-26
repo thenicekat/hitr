@@ -96,10 +96,11 @@ note, preserving completion state and leaving the original `focus.json` intact.
 
 ### macOS (prebuilt)
 
-Grab the `.dmg` for your arch from the [latest release](https://github.com/thenicekat/hitr/releases/latest):
+Grab the Apple Silicon `.dmg` from the [latest release](https://github.com/thenicekat/hitr/releases/latest):
 
 - Apple Silicon (M1/M2/M3/M4): `hitr_<version>_aarch64.dmg`
-- Intel: `hitr_<version>_x64.dmg`
+
+Current prebuilt releases support Apple Silicon only.
 
 Open the DMG and drag `hitr.app` to `/Applications`.
 
