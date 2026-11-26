@@ -446,7 +446,40 @@ fn input_type(spec: &OpenAPI, schema: &Schema) -> Option<FieldType> {
         ),
         _ => (scalar(schema)?, false),
     };
-    Some(FieldType { scalar, array })
+    Some(FieldType {
+        scalar,
+        array,
+        properties: BTreeMap::new(),
+    })
+}
+
+// Body schemas can contain nested objects; query parameters remain scalar or scalar arrays.
+// Bound recursion prevents cyclic OpenAPI references from exhausting the stack.
+fn body_input_type(spec: &OpenAPI, schema: &Schema, depth: usize) -> Option<FieldType> {
+    if depth == 0 || schema.schema_data.read_only {
+        return None;
+    }
+    match &schema.schema_kind {
+        SchemaKind::Type(Type::Array(array)) => {
+            let item = resolve_schema_boxed(spec, array.items.as_ref()?)?;
+            let mut field = body_input_type(spec, item, depth - 1)?;
+            if field.array {
+                return None;
+            }
+            field.array = true;
+            Some(field)
+        }
+        SchemaKind::Type(Type::Object(_)) | SchemaKind::AllOf { .. } => {
+            let mut properties = BTreeMap::new();
+            body_fields(spec, schema, depth - 1, &mut properties);
+            (!properties.is_empty()).then_some(FieldType {
+                scalar: Scalar::Object,
+                array: false,
+                properties,
+            })
+        }
+        _ => input_type(spec, schema),
+    }
 }
 
 fn body_fields(
@@ -461,9 +494,12 @@ fn body_fields(
     match &schema.schema_kind {
         SchemaKind::Type(Type::Object(object)) => {
             for (name, field) in &object.properties {
-                if ordinary_name(name) {
-                    if let Some(kind) =
-                        resolve_schema_boxed(spec, field).and_then(|field| input_type(spec, field))
+                if let Some(kind) = resolve_schema_boxed(spec, field)
+                    .and_then(|field| body_input_type(spec, field, depth - 1))
+                {
+                    // An object named `key` (such as a selector) is structural, not an API key.
+                    if ordinary_name(name)
+                        || (name == "key" && matches!(kind.scalar, Scalar::Object))
                     {
                         fields.insert(name.clone(), kind);
                     }
@@ -496,6 +532,7 @@ fn mcp_schema(spec: &OpenAPI, method: &str, path: &str, op: &Operation) -> Input
         })
         .collect();
     let mut schema = InputSchema {
+        version: 1,
         method: method.to_owned(),
         url: build_url(path),
         query: BTreeMap::new(),
@@ -547,9 +584,18 @@ fn mcp_schema(spec: &OpenAPI, method: &str, path: &str, op: &Operation) -> Input
             .and_then(|reference| resolve_schema(spec, reference))
         {
             body_fields(spec, body_schema, 8, &mut schema.body);
-            schema
-                .body
-                .retain(|name, _| !api_keys.contains(&name.to_ascii_lowercase()));
+            fn remove_api_keys(
+                fields: &mut BTreeMap<String, FieldType>,
+                api_keys: &BTreeSet<String>,
+            ) {
+                fields.retain(|name, field| {
+                    remove_api_keys(&mut field.properties, api_keys);
+                    (!api_keys.contains(&name.to_ascii_lowercase())
+                        || matches!(field.scalar, Scalar::Object))
+                        && (!matches!(field.scalar, Scalar::Object) || !field.properties.is_empty())
+                });
+            }
+            remove_api_keys(&mut schema.body, &api_keys);
         }
     }
     schema
@@ -559,14 +605,22 @@ fn mcp_schema(spec: &OpenAPI, method: &str, path: &str, op: &Operation) -> Input
 pub fn recover_mcp_schemas(root: &Path, requests: &mut [Request]) {
     let mut pending: HashMap<(String, String), Vec<&mut Request>> = HashMap::new();
     for req in requests {
-        if req
+        let valid = req
             .mcp_schema
             .as_ref()
-            .is_some_and(|schema| schema.matches(req))
+            .is_some_and(|schema| schema.matches(req));
+        if valid
+            && req
+                .mcp_schema
+                .as_ref()
+                .is_some_and(|schema| schema.version >= 1)
         {
             continue;
         }
-        req.mcp_schema = None;
+        // Keep usable legacy metadata if the original OpenAPI document is unavailable.
+        if !valid {
+            req.mcp_schema = None;
+        }
         if req.http.url.starts_with("{{baseUrl}}/") {
             pending
                 .entry((
