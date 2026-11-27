@@ -30,6 +30,7 @@ pub(super) enum Status {
 
 pub(super) struct Access {
     enabled: Mutex<bool>,
+    full_response: Mutex<bool>,
     allowed_envs: Mutex<Result<Vec<String>, String>>,
     revoked: watch::Sender<()>,
 }
@@ -38,6 +39,7 @@ impl Access {
     fn new(enabled: bool) -> Self {
         Self {
             enabled: Mutex::new(enabled),
+            full_response: Mutex::new(false),
             allowed_envs: Mutex::new(Ok(Vec::new())),
             revoked: watch::channel(()).0,
         }
@@ -45,6 +47,8 @@ impl Access {
 
     pub(super) fn load() -> Self {
         let access = Self::new(enabled_path().is_ok_and(|path| path.is_file()));
+        *access.full_response.lock().unwrap() =
+            full_response_path().is_ok_and(|path| path.is_file());
         *access.allowed_envs.lock().unwrap() = (|| -> io::Result<Vec<String>> {
             let path = allowed_envs_path()?;
             match std::fs::read(path) {
@@ -55,6 +59,36 @@ impl Access {
         })()
         .map_err(|e| e.to_string());
         access
+    }
+
+    pub(super) fn full_response(&self) -> bool {
+        *self.full_response.lock().unwrap()
+    }
+
+    pub(super) fn set_full_response(&self, enabled: bool) -> io::Result<()> {
+        let mut current = self.full_response.lock().unwrap();
+        let path = full_response_path()?;
+        if enabled {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .mode(0o600)
+                .open(path)?;
+        } else {
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+        }
+        *current = enabled;
+        // Cancel in-flight requests so a response cannot use the previous policy.
+        self.revoke();
+        Ok(())
     }
 
     pub(super) fn allowed_envs(&self) -> Result<Vec<String>, String> {
@@ -284,6 +318,7 @@ impl Broker {
             input.inputs,
         )?;
         let secrets = response_secrets(&request, vault.as_ref());
+        let full_response = self.access.full_response();
         let send = async {
             let start = Instant::now();
             let response = self
@@ -292,7 +327,8 @@ impl Broker {
                 .await
                 .map_err(|_| "Hitr could not reach the saved API.")?;
             let status = response.status().as_u16();
-            let (body, omission_reason) = match read_body(response, &secrets).await? {
+            let (body, omission_reason) = match read_body(response, &secrets, full_response).await?
+            {
                 Ok(body) => (Some(body), None),
                 Err(reason) => (None, Some(reason)),
             };
@@ -352,6 +388,7 @@ fn response_secrets(
 async fn read_body(
     mut response: reqwest::Response,
     secrets: &[String],
+    full_response: bool,
 ) -> Result<Result<String, &'static str>, &'static str> {
     let mut bytes = Vec::new();
     while let Some(chunk) = response
@@ -359,7 +396,7 @@ async fn read_body(
         .await
         .map_err(|_| "Hitr could not read the API response.")?
     {
-        if bytes.len() + chunk.len() > MAX_BODY_BYTES {
+        if !full_response && bytes.len() + chunk.len() > MAX_BODY_BYTES {
             return Ok(Err("size_limit"));
         }
         bytes.extend_from_slice(&chunk);
@@ -367,7 +404,94 @@ async fn read_body(
     let Ok(body) = String::from_utf8(bytes) else {
         return Ok(Err("invalid_utf8"));
     };
-    Ok(filter_body(body, secrets).ok_or("credential_match"))
+    if full_response {
+        Ok(Ok(redact_body(body, secrets)))
+    } else {
+        Ok(filter_body(body, secrets).ok_or("credential_match"))
+    }
+}
+
+fn redact_body(body: String, secrets: &[String]) -> String {
+    let mut patterns: Vec<String> = secrets
+        .iter()
+        .filter(|s| !s.is_empty())
+        .flat_map(|secret| {
+            let encoded: String = url::form_urlencoded::byte_serialize(secret.as_bytes()).collect();
+            [secret.clone(), encoded]
+        })
+        .collect();
+    // Match longest first so overlapping credentials cannot leave a suffix exposed.
+    patterns.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    patterns.dedup();
+    fn redact(text: &str, patterns: &[String]) -> String {
+        let mut output = String::new();
+        let mut rest = text;
+        while !rest.is_empty() {
+            if let Some(pattern) = patterns.iter().find(|p| rest.starts_with(p.as_str())) {
+                output.push_str("[REDACTED]");
+                rest = &rest[pattern.len()..];
+            } else {
+                let c = rest.chars().next().unwrap();
+                output.push(c);
+                rest = &rest[c.len_utf8()..];
+            }
+        }
+        output
+    }
+    fn walk(value: &mut Value, patterns: &[String]) {
+        match value {
+            Value::String(s) => *s = redact(s, patterns),
+            Value::Array(items) => items.iter_mut().for_each(|v| walk(v, patterns)),
+            Value::Object(map) => {
+                for (key, mut value) in std::mem::take(map) {
+                    let normalized: String = key
+                        .chars()
+                        .filter(|c| c.is_ascii_alphanumeric())
+                        .flat_map(char::to_lowercase)
+                        .collect();
+                    if matches!(
+                        normalized.as_str(),
+                        "token"
+                            | "accesstoken"
+                            | "refreshtoken"
+                            | "idtoken"
+                            | "apikey"
+                            | "password"
+                            | "secret"
+                            | "authorization"
+                            | "cookie"
+                            | "setcookie"
+                    ) {
+                        value = Value::String("[REDACTED]".into());
+                    } else {
+                        walk(&mut value, patterns);
+                    }
+                    let redacted_key = redact(&key, patterns);
+                    let mut unique_key = redacted_key.clone();
+                    let mut suffix = 2;
+                    while map.contains_key(&unique_key) {
+                        unique_key = format!("{redacted_key} ({suffix})");
+                        suffix += 1;
+                    }
+                    map.insert(unique_key, value);
+                }
+            }
+            Value::Number(_) | Value::Bool(_) => {
+                let text = value.to_string();
+                let redacted = redact(&text, patterns);
+                if redacted != text {
+                    *value = Value::String(redacted);
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Ok(mut json) = serde_json::from_str::<Value>(&body) {
+        walk(&mut json, &patterns);
+        json.to_string()
+    } else {
+        redact(&body, &patterns)
+    }
 }
 
 fn filter_body(body: String, secrets: &[String]) -> Option<String> {
@@ -406,6 +530,10 @@ fn bridge_dir() -> io::Result<PathBuf> {
 
 fn enabled_path() -> io::Result<PathBuf> {
     bridge_dir().map(|dir| dir.with_file_name("mcp-enabled"))
+}
+
+fn full_response_path() -> io::Result<PathBuf> {
+    bridge_dir().map(|dir| dir.with_file_name("mcp-full-response"))
 }
 
 fn allowed_envs_path() -> io::Result<PathBuf> {
@@ -999,6 +1127,72 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("environment’s HTTPS origin"));
         assert!(!err.contains("example-fixture-token"));
+    }
+
+    #[tokio::test]
+    async fn full_response_returns_large_body_with_credentials_redacted() {
+        let body = format!(
+            r#"{{"token":"fixture/token","data":"{}"}}"#,
+            "x".repeat(MAX_BODY_BYTES)
+        );
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let (base, certificate, server) = https_server(|_| vec![reply.clone(), reply]);
+        let client = http_client_builder()
+            .add_root_certificate(certificate)
+            .build()
+            .unwrap();
+        let secrets = vec!["fixture/token".into()];
+        let full = read_body(client.get(&base).send().await.unwrap(), &secrets, true)
+            .await
+            .unwrap()
+            .unwrap();
+        let json: Value = serde_json::from_str(&full).unwrap();
+        assert_eq!(json["token"], "[REDACTED]");
+        assert_eq!(json["data"].as_str().unwrap().len(), MAX_BODY_BYTES);
+        assert!(!full.contains("fixture/token"));
+        assert_eq!(
+            read_body(client.get(&base).send().await.unwrap(), &secrets, false)
+                .await
+                .unwrap(),
+            Err("size_limit")
+        );
+        server.join().unwrap();
+        assert!(!Access::new(true).full_response());
+    }
+
+    #[test]
+    fn full_response_redacts_encoded_nested_and_overlapping_credentials() {
+        let secrets = vec!["fixture".into(), "fixture/token".into()];
+        let body =
+            r#"{"nested":["fixture/token","fixture%2Ftoken","fixture\u002ftoken"],"ok":true}"#;
+        let redacted: Value = serde_json::from_str(&redact_body(body.into(), &secrets)).unwrap();
+        assert_eq!(
+            redacted,
+            json!({"nested":["[REDACTED]","[REDACTED]","[REDACTED]"],"ok":true})
+        );
+        assert_eq!(
+            redact_body("fixture/token fixture%2Ftoken".into(), &secrets),
+            "[REDACTED] [REDACTED]"
+        );
+        assert_eq!(redact_body("unchanged".into(), &secrets), "unchanged");
+        let body =
+            r#"{"access_token":"new-token","count":12,"nested":{"refresh_token":"another-token"}}"#;
+        let redacted: Value = serde_json::from_str(&redact_body(body.into(), &[])).unwrap();
+        assert_eq!(
+            redacted,
+            json!({"access_token":"[REDACTED]", "count":12,"nested":{"refresh_token":"[REDACTED]"}})
+        );
+        let body = r#"{"first-token":1,"second-token":2,"value":12345}"#;
+        let redacted: Value = serde_json::from_str(&redact_body(
+            body.into(),
+            &["first-token".into(), "second-token".into(), "12345".into()],
+        ))
+        .unwrap();
+        assert_eq!(redacted.as_object().unwrap().len(), 3);
+        assert_eq!(redacted["value"], "[REDACTED]");
     }
 
     #[test]

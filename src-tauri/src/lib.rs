@@ -160,6 +160,7 @@ fn mcp_help(state: State<'_, AppState>) -> serde_json::Value {
         serde_json::json!({
             "status": status,
             "enabled": enabled,
+            "full_response": state.mcp_access.full_response(),
             "allowed_envs": state.mcp_access.allowed_envs().unwrap_or_default(),
             "allowed_envs_error": state.mcp_access.allowed_envs().err(),
             "client_config": client_config
@@ -169,6 +170,22 @@ fn mcp_help(state: State<'_, AppState>) -> serde_json::Value {
     {
         let _ = state;
         serde_json::json!({"status": {"state": "unsupported"}, "enabled": false})
+    }
+}
+
+#[tauri::command]
+fn set_mcp_full_response(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        state
+            .mcp_access
+            .set_full_response(enabled)
+            .map_err(|e| format!("Could not save the MCP response setting: {e}"))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (state, enabled);
+        Err("MCP is unavailable on this platform.".into())
     }
 }
 
@@ -983,6 +1000,7 @@ pub fn run() {
             mcp_help,
             set_mcp_enabled,
             set_mcp_allowed_envs,
+            set_mcp_full_response,
             updates::check_update,
             updates::install_update,
             vault_unlock,
