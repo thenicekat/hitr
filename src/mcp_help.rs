@@ -110,6 +110,33 @@ pub fn McpHelpPanel(on_close: EventHandler<()>, vault_locked: bool, envs: Vec<En
                         if let Some(error) = &help.allowed_envs_error {
                             p { role: "alert", class: "mcp-error", "MCP requests are blocked because restrictions could not be loaded: {error}" }
                         }
+                        div { class: "mcp-access-row",
+                            label { r#for: "mcp-full-response", "Share full response" }
+                            input {
+                                id: "mcp-full-response",
+                                class: "mcp-switch",
+                                r#type: "checkbox",
+                                role: "switch",
+                                aria_describedby: "mcp-full-response-scope",
+                                checked: help.full_response,
+                                disabled: *saving.read(),
+                                onchange: move |event| {
+                                    let enabled = event.checked();
+                                    saving.set(true);
+                                    settings_error.set(None);
+                                    spawn(async move {
+                                        if let Err(error) = api::set_mcp_full_response(enabled).await {
+                                            settings_error.set(Some(error));
+                                        }
+                                        status.set(Some(api::mcp_help().await));
+                                        saving.set(false);
+                                    });
+                                }
+                            }
+                        }
+                        p { id: "mcp-full-response-scope", class: "mcp-hint",
+                            "Send the entire text response to your MCP client and LLM with known credentials and common JSON token fields replaced by [REDACTED]. Removes the 128 KiB limit. Other sensitive data may still be included. Off by default; remembered across launches."
+                        }
                         fieldset { class: "mcp-environments",
                             disabled: *saving.read() || help.allowed_envs_error.is_some(),
                             legend { "Allowed environments" }

@@ -149,6 +149,8 @@ pub struct FiredResponse {
 
 #[derive(Clone, Deserialize)]
 pub struct McpHelp {
+    #[serde(default)]
+    pub full_response: bool,
     pub status: McpStatus,
     pub enabled: bool,
     pub client_config: Option<String>,

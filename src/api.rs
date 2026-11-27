@@ -118,6 +118,14 @@ pub async fn set_mcp_enabled(enabled: bool) -> Result<(), String> {
     call_unit("set_mcp_enabled", Args { enabled }).await
 }
 
+pub async fn set_mcp_full_response(enabled: bool) -> Result<(), String> {
+    #[derive(Serialize)]
+    struct Args {
+        enabled: bool,
+    }
+    call_unit("set_mcp_full_response", Args { enabled }).await
+}
+
 pub async fn set_mcp_allowed_envs(names: Vec<String>) -> Result<(), String> {
     #[derive(Serialize)]
     struct Args {
