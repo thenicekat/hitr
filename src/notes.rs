@@ -530,6 +530,20 @@ pub fn Notes() -> Element {
                                 id: note_id,
                                 initial: text(),
                                 size: preferences().text_size,
+                                hide_completed: preferences().hide_completed,
+                                preferences_busy: !preferences_ready() || preferences_busy(),
+                                on_toggle_completed: move |_| {
+                                    preferences_busy.set(true);
+                                    let previous = preferences().hide_completed;
+                                    preferences.write().hide_completed = !previous;
+                                    spawn(async move {
+                                        if let Err(e) = api::save_notes_preferences(&preferences()).await {
+                                            preferences.write().hide_completed = previous;
+                                            window_error.set(Some(format!("Couldn't save preferences: {e}")));
+                                        }
+                                        preferences_busy.set(false);
+                                    });
+                                },
                                 reveal: reveal_line(),
                                 on_change: move |(id, change): (String, EditorChange)| {
                                     if !*ready.peek() || id != *active_id.peek() {
@@ -625,6 +639,9 @@ fn NoteEditor(
     id: String,
     initial: String,
     size: u8,
+    hide_completed: bool,
+    preferences_busy: bool,
+    on_toggle_completed: EventHandler<()>,
     reveal: Option<String>,
     on_change: EventHandler<(String, EditorChange)>,
 ) -> Element {
@@ -681,9 +698,11 @@ fn NoteEditor(
             }
             button {
                 "data-action": "collapse-done",
-                title: "Hide completed tasks",
-                aria_label: "Hide completed tasks",
-                aria_pressed: "false",
+                title: if hide_completed { "Show completed tasks" } else { "Hide completed tasks" },
+                aria_label: if hide_completed { "Show completed tasks" } else { "Hide completed tasks" },
+                aria_pressed: "{hide_completed}",
+                disabled: preferences_busy,
+                onclick: move |_| on_toggle_completed.call(()),
                 "✓"
             }
             button {
@@ -706,7 +725,7 @@ fn NoteEditor(
         }
         div {
             id: "note-editor",
-            class: "note-editor",
+            class: if hide_completed { "note-editor hide-completed" } else { "note-editor" },
             contenteditable: "true",
             role: "textbox",
             aria_label: "Quick note",

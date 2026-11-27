@@ -173,6 +173,8 @@ pub struct NotesPreferences {
     pub dark: bool,
     pub text_size: u8,
     pub always_on_top: bool,
+    #[serde(default)]
+    pub hide_completed: bool,
 }
 impl Default for NotesPreferences {
     fn default() -> Self {
@@ -180,6 +182,7 @@ impl Default for NotesPreferences {
             dark: false,
             text_size: 15,
             always_on_top: true,
+            hide_completed: false,
         }
     }
 }
